@@ -10,3 +10,5 @@ target
 *.crt
 *.p12
 *.pkcs12
+.idea
+Cargo.lock
