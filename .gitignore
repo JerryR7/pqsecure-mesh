@@ -1,3 +1,12 @@
 target
 .env
 .DS_Store
+/target
+**/*.rs.bk
+/data
+/step
+*.pem
+*.key
+*.crt
+*.p12
+*.pkcs12

@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  pqsecure-mesh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pqsecure-mesh
+    ports:
+      - "8080:8080"  # REST API
+      - "9090:9090"  # Proxy
+    volumes:
+      - pqsecure_data:/app/data
+    environment:
+      - PQSM__GENERAL__LOG_LEVEL=debug
+      - PQSM__CERT__CA_TYPE=smallstep
+      - PQSM__CERT__SMALLSTEP_URL=http://step-ca:9000
+    networks:
+      - pqsecure-network
+    depends_on:
+      - step-ca
+
+  step-ca:
+    image: smallstep/step-ca:latest
+    container_name: step-ca
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - step_ca_data:/home/step
+    environment:
+      - DOCKER_STEPCA_INIT_NAME=PQSecure Mesh CA
+      - DOCKER_STEPCA_INIT_DNS_NAMES=localhost,step-ca
+      - DOCKER_STEPCA_INIT_PROVISIONER_NAME=admin
+    networks:
+      - pqsecure-network
+
+  # 測試用的微服務 A
+  service-a:
+    image: nginx:alpine
+    container_name: service-a
+    networks:
+      - pqsecure-network
+    volumes:
+      - ./test/service-a:/usr/share/nginx/html
+    depends_on:
+      - pqsecure-mesh
+
+  # 測試用的微服務 B
+  service-b:
+    image: nginx:alpine
+    container_name: service-b
+    networks:
+      - pqsecure-network
+    volumes:
+      - ./test/service-b:/usr/share/nginx/html
+    depends_on:
+      - pqsecure-mesh
+
+volumes:
+  pqsecure_data:
+  step_ca_data:
+
+networks:
+  pqsecure-network:
+    driver: bridge
