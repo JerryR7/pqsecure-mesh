@@ -1,33 +1,36 @@
-mod config;
-mod domain;
-mod service;
-mod infra;
-mod interface;
-
-use std::net::SocketAddr;
 use std::sync::Arc;
-
 use tokio::signal;
 use tracing::{info, warn, error, Level};
-use tracing_subscriber::FmtSubscriber;
 
-use crate::config::Config;
-use crate::domain::CertProvider;
-use crate::service::CertService;
-use crate::infra::{SmallstepClient, MockSmallstepClient};
-use crate::interface::{create_api_router, ApiState};
+use pqsecure_mesh::{
+    Config, Error, Result,
+    telemetry::{setup_telemetry, init_logging},
+    ca::{create_ca_provider, CaProvider},
+    identity::IdentityService,
+    policy::{PolicyEngine, PolicyEvaluator, FilePolicyStore},
+    controller::SidecarController,
+    proxy::{SidecarConfig, MtlsConfig, ProtocolType, PolicyConfig},
+};
+
+/// Run mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunMode {
+    /// Sidecar mode
+    Sidecar,
+    /// Controller mode
+    Controller,
+    /// API server mode
+    ApiServer,
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 初始化日誌系統
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
-
+async fn main() -> Result<()> {
+    // Initialize logging system
+    init_logging()?;
+    
     info!("Starting PQSecure Mesh");
-
-    // 載入配置
+    
+    // Load configuration
     let config = match Config::load() {
         Ok(cfg) => {
             info!("Configuration loaded successfully");
@@ -39,56 +42,140 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::new(Config::default())
         }
     };
-
-    // 初始化憑證提供者
-    let cert_provider: Arc<dyn CertProvider> = match config.cert.ca_type.as_str() {
-        "smallstep" => {
-            info!("Using Smallstep CA provider");
-            match SmallstepClient::new(config.clone()) {
-                Ok(client) => Arc::new(client),
-                Err(e) => {
-                    error!("Failed to initialize Smallstep client: {}", e);
-                    info!("Falling back to mock provider for development");
-                    Arc::new(MockSmallstepClient::new(config.clone()))
-                }
-            }
-        },
+    
+    // Parse run mode
+    let mode = match config.general.mode.as_str() {
+        "sidecar" => RunMode::Sidecar,
+        "controller" => RunMode::Controller,
+        "api_server" => RunMode::ApiServer,
         _ => {
-            info!("Using mock CA provider for development");
-            Arc::new(MockSmallstepClient::new(config.clone()))
+            warn!("Unknown mode: {}, defaulting to sidecar", config.general.mode);
+            RunMode::Sidecar
         }
     };
-
-    // 初始化憑證服務
-    let cert_service = Arc::new(CertService::new(cert_provider, config.clone()));
-
-    // 建立 API 伺服器狀態
-    let api_state = ApiState {
-        cert_service: cert_service.clone(),
-        config: config.clone(),
-    };
-
-    // 建立 API 路由
-    let app = create_api_router(api_state);
-
-    // 獲取 API 伺服器位址
-    let addr: SocketAddr = config.api_address().parse()?;
-
-    // 啟動 API 伺服器
-    info!("Starting REST API server at {}", addr);
-
-    // 使用 axum 啟動 HTTP 伺服器
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
+    
+    match mode {
+        RunMode::Sidecar => {
+            // Run single sidecar mode
+            info!("Starting in sidecar mode");
+            run_sidecar_mode(config).await?;
+        },
+        RunMode::Controller => {
+            // Run controller mode
+            info!("Starting in controller mode");
+            run_controller_mode(config).await?;
+        },
+        RunMode::ApiServer => {
+            // Run only API server mode
+            info!("Starting in API server mode");
+            run_api_server_mode(config).await?;
+        },
+    }
+    
     info!("PQSecure Mesh shutting down");
     Ok(())
 }
 
-/// 等待中斷信號
-async fn shutdown_signal() {
+/// Sidecar mode run logic
+async fn run_sidecar_mode(config: Arc<Config>) -> Result<()> {
+    // Initialize telemetry
+    let metrics = setup_telemetry(config.clone())?;
+    
+    // Create CA client
+    let ca_provider = create_ca_provider(config.clone())?;
+    
+    // Create identity provider
+    let identity_provider = Arc::new(IdentityService::new(
+        ca_provider,
+        config.clone(),
+    ));
+    
+    // Create policy engine
+    let policy_store = Arc::new(FilePolicyStore::new(config.clone()));
+    let policy_evaluator = Arc::new(PolicyEvaluator::new());
+    let policy_engine = Arc::new(PolicyEngine::new(
+        policy_store,
+        policy_evaluator,
+    ));
+    
+    // Create sidecar controller
+    let controller = SidecarController::new(
+        config.clone(),
+        identity_provider,
+        policy_engine,
+        metrics,
+    );
+    
+    // Get sidecar config
+    let sidecar_config = SidecarConfig {
+        listen_addr: config.proxy.listen_addr.clone(),
+        listen_port: config.proxy.listen_port,
+        upstream_addr: config.proxy.upstream_addr.clone(),
+        upstream_port: config.proxy.upstream_port,
+        tenant_id: config.identity.tenant.clone(),
+        service_id: config.identity.service.clone(),
+        protocol: match config.proxy.protocol.as_str() {
+            "http" => ProtocolType::Http,
+            "grpc" => ProtocolType::Grpc,
+            _ => ProtocolType::Tcp,
+        },
+        mtls_config: MtlsConfig {
+            enable_mtls: config.cert.enable_mtls,
+            enable_pqc: config.cert.enable_pqc,
+        },
+        policy_config: PolicyConfig {
+            policy_path: config.policy.policy_path.clone(),
+        },
+    };
+    
+    // Start sidecar
+    let handle = controller.start_sidecar(sidecar_config).await?;
+    
+    // Wait for shutdown signal
+    wait_for_shutdown_signal().await;
+    
+    // Stop sidecar
+    controller.stop_sidecar(handle).await?;
+    
+    Ok(())
+}
+
+/// Controller mode run logic
+async fn run_controller_mode(config: Arc<Config>) -> Result<()> {
+    // Initialize telemetry
+    let metrics = setup_telemetry(config.clone())?;
+    
+    // Create API server
+    let api_server = pqsecure_mesh::api::create_api_server(config.clone(), metrics.clone())?;
+    
+    // Start API server
+    let api_addr = format!("{}:{}", config.api.listen_addr, config.api.listen_port);
+    info!("Starting API server on {}", api_addr);
+    
+    // Start server and wait for shutdown signal
+    tokio::select! {
+        result = api_server.serve(api_addr.parse()?) => {
+            if let Err(e) = result {
+                error!("API server error: {}", e);
+                return Err(Error::ApiServerError(e.to_string()));
+            }
+        },
+        _ = wait_for_shutdown_signal() => {
+            info!("Received shutdown signal");
+        }
+    }
+    
+    Ok(())
+}
+
+/// API server mode run logic
+async fn run_api_server_mode(config: Arc<Config>) -> Result<()> {
+    // Similar to controller mode, but does not start rotation controller
+    run_controller_mode(config).await
+}
+
+/// Wait for shutdown signal
+async fn wait_for_shutdown_signal() {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
