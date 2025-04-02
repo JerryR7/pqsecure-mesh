@@ -31,7 +31,7 @@ Ideal for:
 
 ```bash
 # Clone the project
-git clone https://github.com/your-username/pqsecure-mesh.git
+git clone https://github.com/JerryR7/pqsecure-mesh.git
 cd pqsecure-mesh
 
 # Build the project
@@ -58,7 +58,7 @@ docker run -p 8080:8080 -p 9090:9090 -e PQSM__GENERAL__MODE=sidecar pqsecure-mes
 
 ```bash
 # Start the full environment with test services
-docker-compose up -d
+docker compose up -d
 ```
 
 ## 📝 API Reference
