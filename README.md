@@ -162,7 +162,7 @@ deny_rules:
   - ip: "10.0.0.0/8"
 ```
 
-## �📊 Monitoring & Metrics
+## 📊 Monitoring & Metrics
 
 PQSecure Mesh provides rich observability:
 
