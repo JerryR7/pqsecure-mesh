@@ -61,6 +61,29 @@ docker run -p 8080:8080 -p 9090:9090 -e PQSM__GENERAL__MODE=sidecar pqsecure-mes
 docker compose up -d
 ```
 
+## 📚 Architecture
+
+PQSecure Mesh follows **Clean Architecture** principles and a modular design:
+
+```
+pqsecure-mesh/
+├── src/
+│   ├── identity/       - Identity management
+│   ├── crypto/         - Cryptographic features
+│   ├── proxy/          - Proxy functionality
+│   ├── policy/         - Policy engine
+│   ├── ca/             - CA integration
+│   ├── api/            - REST API
+│   ├── controller/     - Control logic
+│   ├── telemetry/      - Telemetry and monitoring
+│   └── utils/          - Utility functions
+├── config/             - Configuration files
+├── data/               - Runtime data (e.g., certificates, policies)
+├── Dockerfile          - Docker build file
+├── docker-compose.yml  - Docker Compose configuration
+└── Makefile            - Development and build commands
+```
+
 ## 📝 API Reference
 
 ### Request Identity
@@ -105,24 +128,6 @@ curl -X POST http://localhost:8080/api/v1/policy \
   }'
 ```
 
-## 📚 Architecture
-
-PQSecure Mesh follows **Clean Architecture** principles and a modular design:
-
-```
-pqsecure-mesh/
-├── src/
-│   ├── identity/       - Identity management
-│   ├── crypto/         - Cryptographic features
-│   ├── proxy/          - Proxy functionality
-│   ├── policy/         - Policy engine
-│   ├── ca/             - CA integration
-│   ├── api/            - REST API
-│   ├── controller/     - Control logic
-│   ├── telemetry/      - Telemetry and monitoring
-│   └── utils/          - Utility functions
-```
-
 ## 🔗 Smallstep CA Integration
 
 PQSecure Mesh integrates smoothly with Smallstep CA:
@@ -157,7 +162,7 @@ deny_rules:
   - ip: "10.0.0.0/8"
 ```
 
-## 📊 Monitoring & Metrics
+## �📊 Monitoring & Metrics
 
 PQSecure Mesh provides rich observability:
 
