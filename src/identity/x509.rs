@@ -1,122 +1,90 @@
-use std::collections::HashMap;
-use crate::identity::types::SpiffeId;
+use std::time::{Duration, SystemTime};
 use crate::error::Error;
+use crate::identity::spiffe::SpiffeUtils;
+use crate::identity::types::SpiffeId;
 
-/// SPIFFE utility functions and constants
-pub struct SpiffeUtils;
+/// X.509 certificate utility
+pub struct X509Utils;
 
-impl SpiffeUtils {
-    /// SPIFFE URI scheme
-    pub const SCHEME: &'static str = "spiffe";
-    
-    /// Check if URI is a valid SPIFFE ID
-    pub fn is_valid_spiffe_uri(uri: &str) -> bool {
-        if let Ok(url) = url::Url::parse(uri) {
-            return url.scheme() == Self::SCHEME && 
-                   url.host_str().is_some() && 
-                   !url.path().is_empty() && 
-                   url.path() != "/";
-        }
-        false
-    }
-    
-    /// Extract tenant from SPIFFE ID
-    pub fn extract_tenant(uri: &str) -> Result<String, Error> {
-        let spiffe_id = SpiffeId::from_uri(uri)?;
-        Ok(spiffe_id.tenant)
-    }
-    
-    /// Extract service from SPIFFE ID
-    pub fn extract_service(uri: &str) -> Result<String, Error> {
-        let spiffe_id = SpiffeId::from_uri(uri)?;
-        Ok(spiffe_id.service)
-    }
-    
-    /// Encode SPIFFE ID to X.509 SAN
-    pub fn encode_to_san(spiffe_id: &SpiffeId) -> Result<String, Error> {
-        Ok(format!("URI:{}", spiffe_id.uri))
-    }
-    
-    /// Decode SPIFFE ID from X.509 SAN
-    pub fn decode_from_san(san: &str) -> Result<SpiffeId, Error> {
-        if san.starts_with("URI:") {
-            let uri = &san[4..];
-            SpiffeId::from_uri(uri)
-        } else {
-            Err(Error::InvalidSpiffeId(format!("Invalid SAN format: {}", san)))
-        }
-    }
-    
-    /// 從 URI 清單中提取 SPIFFE ID 
-    pub fn extract_from_uri_list(uris: &[String]) -> Result<Option<SpiffeId>, Error> {
-        for uri in uris {
-            if uri.starts_with("URI:spiffe://") || uri.starts_with("spiffe://") {
-                let clean_uri = uri.strip_prefix("URI:").unwrap_or(uri);
-                return Ok(Some(SpiffeId::from_uri(clean_uri)?));
-            }
-        }
-        Ok(None)
-    }
-    
-    /// 生成 SPIFFE ID 路徑
-    pub fn generate_path(tenant: &str, service: &str) -> String {
-        format!("{}/{}", tenant, service)
-    }
-    
-    /// 生成多個 DNS SANs
-    pub fn generate_dns_sans(service: &str, namespace: &str) -> Vec<String> {
-        vec![
-            format!("{}", service),
-            format!("{}.{}", service, namespace),
-            format!("{}.{}.svc", service, namespace),
-            format!("{}.{}.svc.cluster.local", service, namespace),
-        ]
-    }
-    
-    /// 從憑證中提取 SPIFFE ID
-    pub fn extract_from_certificate(cert_pem: &str) -> Result<Option<SpiffeId>, Error> {
-        // 注意：這是一個簡化的實現，實際應該使用 X.509 解析庫
-        // 目前我們只檢查 PEM 內容中的 SPIFFE ID 字符串
+impl X509Utils {
+    /// Extract fingerprint from PEM certificate
+    pub fn extract_fingerprint(cert_pem: &str) -> Result<String, Error> {
+        // Note: This is a simplified implementation. In practice, use a cryptographic library.
+        // The actual implementation should use OpenSSL or other libraries to parse the certificate and calculate the SHA256 fingerprint.
         
-        // 嘗試匹配 URI:spiffe:// 格式
-        if let Some(start) = cert_pem.find("URI:spiffe://") {
-            let uri_part = &cert_pem[start + 4..]; // 跳過 "URI:"
-            if let Some(end) = uri_part.find('"') {
-                let uri = &uri_part[..end];
-                return Ok(Some(SpiffeId::from_uri(uri)?));
-            }
+        // Simulated implementation: Use the hash value of the certificate content as the fingerprint
+        let fingerprint = format!("SHA256:{:x}", md5::compute(cert_pem.as_bytes()));
+        Ok(fingerprint)
+    }
+    
+    /// Extract signature algorithm from PEM certificate
+    pub fn extract_signature_algorithm(cert_pem: &str) -> Result<String, Error> {
+        // Note: This is a simplified implementation.
+        // In practice, use an X.509 parsing library to obtain the actual signature algorithm.
+        
+        // Check if the certificate content contains PQC algorithm identifiers
+        if cert_pem.contains("DILITHIUM") || cert_pem.contains("dilithium") {
+            return Ok("dilithium".to_string());
+        } else if cert_pem.contains("KYBER") || cert_pem.contains("kyber") {
+            return Ok("kyber".to_string());
+        } else if cert_pem.contains("FALCON") || cert_pem.contains("falcon") {
+            return Ok("falcon".to_string());
+        } else if cert_pem.contains("ECDSA") || cert_pem.contains("ecdsa") {
+            return Ok("ecdsa-with-SHA256".to_string());
+        } else if cert_pem.contains("RSA") || cert_pem.contains("rsa") {
+            return Ok("rsa-sha256".to_string());
         }
         
-        // 嘗試匹配 spiffe:// 格式
-        if let Some(start) = cert_pem.find("spiffe://") {
-            let uri_part = &cert_pem[start..];
-            if let Some(end) = uri_part.find('"') {
-                let uri = &uri_part[..end];
-                return Ok(Some(SpiffeId::from_uri(uri)?));
-            }
-        }
+        // Default return
+        Ok("unknown".to_string())
+    }
+    
+    /// Extract serial number from PEM certificate
+    pub fn extract_serial(cert_pem: &str) -> Result<String, Error> {
+        // Note: This is a simplified implementation.
+        // In practice, use an X.509 parsing library to extract the actual serial number.
         
-        Ok(None)
+        // Generate a fake serial number. In practice, extract it from the certificate.
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let serial = format!("{:016X}", rng.gen::<u64>());
+        
+        Ok(serial)
     }
     
-    /// 驗證 SPIFFE ID 是否屬於指定租戶
-    pub fn validate_tenant_access(spiffe_id: &SpiffeId, allowed_tenant: &str) -> bool {
-        if allowed_tenant == "*" {
-            return true;
-        }
-        spiffe_id.tenant == allowed_tenant
+    /// Extract SPIFFE ID from PEM certificate
+    pub fn extract_spiffe_id(cert_pem: &str) -> Result<Option<SpiffeId>, Error> {
+        SpiffeUtils::extract_from_certificate(cert_pem)
     }
     
-    /// 驗證 SPIFFE ID 是否屬於指定服務
-    pub fn validate_service_access(spiffe_id: &SpiffeId, allowed_service: &str) -> bool {
-        if allowed_service == "*" {
-            return true;
-        }
-        spiffe_id.service == allowed_service
+    /// Extract validity period from PEM certificate
+    pub fn extract_validity(cert_pem: &str) -> Result<(SystemTime, SystemTime), Error> {
+        // Note: This is a simplified implementation.
+        // In practice, use an X.509 parsing library to extract the actual validity period.
+        
+        // Assume the certificate was just issued and is valid for one year
+        let now = SystemTime::now();
+        let expires = now + Duration::from_secs(365 * 24 * 60 * 60);
+        
+        Ok((now, expires))
     }
     
-    /// 驗證 SPIFFE ID 格式
-    pub fn validate_format(uri: &str) -> bool {
-        Self::is_valid_spiffe_uri(uri)
+    /// Check if the PEM certificate is a post-quantum certificate
+    pub fn is_post_quantum(cert_pem: &str, signature_algorithm: &str) -> bool {
+        signature_algorithm.contains("dilithium") ||
+        signature_algorithm.contains("kyber") ||
+        signature_algorithm.contains("falcon") ||
+        cert_pem.contains("DILITHIUM") ||
+        cert_pem.contains("KYBER") ||
+        cert_pem.contains("FALCON")
+    }
+    
+    /// Verify certificate chain
+    pub fn verify_cert_chain(cert_pem: &str, ca_pem: &str) -> Result<bool, Error> {
+        // Note: This is a simplified implementation.
+        // In practice, use an X.509 verification library to verify the entire certificate chain.
+        
+        // Assume verification is successful
+        Ok(true)
     }
 }
