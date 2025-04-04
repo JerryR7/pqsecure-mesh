@@ -1,15 +1,15 @@
-FROM rust:1.70 as builder
+FROM rust:1.73 as builder
 
 WORKDIR /usr/src/pqsecure-mesh
 COPY . .
 
-# 安裝依賴並建構專案
+# Install dependencies and build the project
 RUN cargo build --release
 
-# 使用較小的基礎映像
+# Use a smaller base image
 FROM debian:bullseye-slim
 
-# 安裝必要的 SSL 庫和 CA 證書
+# Install necessary SSL libraries and CA certificates
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl-dev \
@@ -17,13 +17,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# 從構建階段複製二進制檔案
+# Copy the binary from the build stage
 COPY --from=builder /usr/src/pqsecure-mesh/target/release/pqsecure-mesh /app/
-# 創建必要的目錄
-RUN mkdir -p /app/data/certs
+# Copy configuration files and policies
+COPY --from=builder /usr/src/pqsecure-mesh/config /app/config
+# Create necessary directories
+RUN mkdir -p /app/data/certs /app/data/identity
 
-# 設定默認環境變數
+# Set default environment variables
 ENV PQSM__GENERAL__APP_NAME="PQSecure Mesh"
+ENV PQSM__GENERAL__MODE="sidecar"
 ENV PQSM__GENERAL__LOG_LEVEL="info"
 ENV PQSM__GENERAL__DATA_DIR="/app/data"
 
@@ -38,8 +41,8 @@ ENV PQSM__CERT__ENABLE_MTLS="true"
 ENV PQSM__CERT__ENABLE_PQC="true"
 ENV PQSM__CERT__CA_TYPE="mock"
 
-# 暴露 API 和 Proxy 埠
-EXPOSE 8080 9090
+# Expose API and Proxy ports
+EXPOSE 8080 9090 9091
 
-# 執行應用程序
+# Run the application
 CMD ["/app/pqsecure-mesh"]

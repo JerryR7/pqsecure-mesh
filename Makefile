@@ -1,63 +1,67 @@
 .PHONY: build run test clean docker docker-up docker-down
 
-# 默認目標
+# Default target
 all: build
 
-# 構建專案
+# Build the project
 build:
 	cargo build --release
 
-# 運行專案（開發模式）
+# Run the project (development mode)
 run:
 	cargo run
 
-# 運行測試
+# Run the project (controller mode)
+run-controller:
+	PQSM__GENERAL__MODE=controller cargo run
+
+# Run the project (sidecar mode)
+run-sidecar:
+	PQSM__GENERAL__MODE=sidecar cargo run
+
+# Run tests
 test:
 	cargo test
 
-# 清理構建產物
+# Clean build artifacts
 clean:
 	cargo clean
-	rm -rf ./data/certs
+	rm -rf ./data/certs ./data/identity
 
-# 構建 Docker 映像
+# Build Docker image
 docker:
 	docker build -t pqsecure-mesh .
 
-# 啟動 Docker Compose 環境
+# Start Docker Compose environment
 docker-up:
 	docker-compose up -d
 
-# 關閉 Docker Compose 環境
+# Stop Docker Compose environment
 docker-down:
 	docker-compose down
 
-# 初始化項目目錄
+# Initialize project directories
 init:
-	mkdir -p ./data/certs
+	mkdir -p ./data/certs ./data/identity
 	mkdir -p ./config
 	mkdir -p ./test/service-a
 	mkdir -p ./test/service-b
 	@if [ ! -f .env ]; then cp .env.example .env; fi
-	@echo "項目目錄初始化完成！"
+	@if [ ! -f config/policy.yaml ]; then cp config/policy.yaml.example config/policy.yaml; fi
+	@echo "Project directories initialized!"
 
-# 生成憑證（使用模擬 CA）
+# Generate certificates (using mock CA)
 cert:
-	@echo "生成測試憑證..."
-	curl -X POST http://localhost:8080/api/v1/certs/request \
+	@echo "Generating test certificates..."
+	curl -X POST http://localhost:8080/api/v1/identity/request \
 		-H "Content-Type: application/json" \
 		-d '{"service_name": "$(SERVICE)", "namespace": "default"}'
-	@echo "\n憑證生成完成，儲存在 ./data/certs/default/$(SERVICE)/"
+	@echo "\nCertificates generated and stored in ./data/identity/default/$(SERVICE)/"
 
-# 顯示幫助信息
+# Display help information
 help:
-	@echo "PQSecure Mesh 開發指令:"
-	@echo "  make build        構建專案"
-	@echo "  make run          運行專案 (開發模式)"
-	@echo "  make test         運行測試"
-	@echo "  make clean        清理構建產物"
-	@echo "  make docker       構建 Docker 映像"
-	@echo "  make docker-up    啟動 Docker Compose 環境"
-	@echo "  make docker-down  關閉 Docker Compose 環境"
-	@echo "  make init         初始化專案目錄"
-	@echo "  make cert SERVICE=my-service  生成指定服務的憑證"
+	@echo "PQSecure Mesh development commands:"
+	@echo "  make build              Build the project"
+	@echo "  make run                Run the project (development mode)"
+	@echo "  make run-controller     Run the project (controller mode)"
+	@echo "  make run-sidecar        Run the project (sidecar mode)"
