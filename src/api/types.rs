@@ -1,5 +1,7 @@
 use std::sync::Arc;
 use serde::{Serialize, Deserialize};
+use chrono::{DateTime, Utc};
+
 use crate::config::Config;
 use crate::telemetry::ProxyMetrics;
 use crate::identity::types::{SpiffeId, ServiceIdentity, IdentityStatus};
@@ -15,40 +17,66 @@ pub struct ApiState {
 }
 
 /// API response wrapper
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Standard response format for all API endpoints
+/// providing a consistent structure with success flag
+/// and optional data/error fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiResponse<T> {
     /// Success status
     pub success: bool,
-    /// Response data
+    /// Response data (present when success is true)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<T>,
-    /// Error message
+    /// Error message (present when success is false)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Response timestamp
+    pub timestamp: DateTime<Utc>,
 }
 
 impl<T> ApiResponse<T> {
-    /// Create a success response
+    /// Create a success response with data
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data to include in the response
+    ///
+    /// # Returns
+    ///
+    /// A new ApiResponse with success flag set to true and the provided data
     pub fn success(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
             error: None,
+            timestamp: Utc::now(),
         }
     }
-    
+
     /// Create an error response
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The error message
+    ///
+    /// # Returns
+    ///
+    /// A new ApiResponse with success flag set to false and the provided error message
     pub fn error(message: impl Into<String>) -> Self {
         Self {
             success: false,
             data: None,
             error: Some(message.into()),
+            timestamp: Utc::now(),
         }
     }
 }
 
 /// Identity request payload
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Used to request a new service identity
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityRequest {
     /// Service name
     pub service_name: String,
@@ -72,7 +100,9 @@ fn default_namespace() -> String {
 }
 
 /// Identity response
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Contains information about a provisioned identity
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityResponse {
     /// SPIFFE ID
     pub spiffe_id: String,
@@ -81,9 +111,9 @@ pub struct IdentityResponse {
     /// Serial number
     pub serial: String,
     /// Issued time
-    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub issued_at: DateTime<Utc>,
     /// Expiration time
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: DateTime<Utc>,
     /// Certificate PEM (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cert_pem: Option<String>,
@@ -93,7 +123,9 @@ pub struct IdentityResponse {
 }
 
 /// Identity revocation request
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Used to revoke an existing identity
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RevokeRequest {
     /// SPIFFE ID to revoke
     pub spiffe_id: String,
@@ -102,14 +134,18 @@ pub struct RevokeRequest {
 }
 
 /// Identity check request
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Used to check the status of an identity
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckRequest {
     /// SPIFFE ID to check
     pub spiffe_id: String,
 }
 
 /// Identity check response
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Contains status information about an identity
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckResponse {
     /// SPIFFE ID
     pub spiffe_id: String,
@@ -117,7 +153,7 @@ pub struct CheckResponse {
     pub status: IdentityStatus,
     /// Expiration time
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
     /// Serial number
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
@@ -130,8 +166,8 @@ impl From<ServiceIdentity> for IdentityResponse {
             spiffe_id: identity.spiffe_id.uri,
             fingerprint: identity.fingerprint,
             serial: identity.serial,
-            issued_at: chrono::DateTime::<chrono::Utc>::from(identity.issued_at),
-            expires_at: chrono::DateTime::<chrono::Utc>::from(identity.expires_at),
+            issued_at: DateTime::<Utc>::from(identity.issued_at),
+            expires_at: DateTime::<Utc>::from(identity.expires_at),
             cert_pem: Some(identity.cert_pem),
             key_pem: Some(identity.key_pem),
         }
@@ -139,14 +175,18 @@ impl From<ServiceIdentity> for IdentityResponse {
 }
 
 /// Policy request payload
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Used to request a policy for a specific tenant
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyRequest {
     /// Tenant ID
     pub tenant: String,
 }
 
 /// Health response
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Contains basic health information about the service
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     /// Status
     pub status: String,
@@ -157,7 +197,9 @@ pub struct HealthResponse {
 }
 
 /// Metrics response
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Contains system metrics information
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsResponse {
     /// Total requests
     pub total_requests: u64,
@@ -172,5 +214,66 @@ pub struct MetricsResponse {
     /// Total bytes transferred
     pub total_bytes: u64,
     /// Last updated time
-    pub last_updated_at: chrono::DateTime<chrono::Utc>,
+    pub last_updated_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_api_response_success() {
+        let data = "test data";
+        let response = ApiResponse::success(data);
+
+        assert!(response.success);
+        assert_eq!(response.data, Some(data));
+        assert_eq!(response.error, None);
+    }
+
+    #[test]
+    fn test_api_response_error() {
+        let error = "test error";
+        let response = ApiResponse::<()>::error(error);
+
+        assert!(!response.success);
+        assert_eq!(response.data, None);
+        assert_eq!(response.error, Some(error.to_string()));
+    }
+
+    #[test]
+    fn test_default_namespace() {
+        assert_eq!(default_namespace(), "default");
+    }
+
+    #[test]
+    fn test_identity_response_from_service_identity() {
+        let now = SystemTime::now();
+        let expires = now + std::time::Duration::from_secs(3600);
+
+        let service_identity = ServiceIdentity {
+            spiffe_id: SpiffeId {
+                uri: "spiffe://test/service".to_string(),
+                tenant: "test".to_string(),
+                service: "service".to_string(),
+            },
+            cert_pem: "cert".to_string(),
+            key_pem: "key".to_string(),
+            chain_pem: Some("chain".to_string()),
+            fingerprint: "fingerprint".to_string(),
+            issued_at: now,
+            expires_at: expires,
+            signature_algorithm: "algorithm".to_string(),
+            is_post_quantum: true,
+            serial: "serial".to_string(),
+        };
+
+        let response = IdentityResponse::from(service_identity);
+
+        assert_eq!(response.spiffe_id, "spiffe://test/service");
+        assert_eq!(response.fingerprint, "fingerprint");
+        assert_eq!(response.serial, "serial");
+        assert_eq!(response.cert_pem, Some("cert".to_string()));
+        assert_eq!(response.key_pem, Some("key".to_string()));
+    }
 }

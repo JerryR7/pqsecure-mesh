@@ -47,7 +47,7 @@ impl X509Utils {
         // Generate a fake serial number. In practice, extract it from the certificate.
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        let serial = format!("{:016X}", rng.gen::<u64>());
+        let serial = format!("{:016X}", rng.r#gen::<u64>());
         
         Ok(serial)
     }

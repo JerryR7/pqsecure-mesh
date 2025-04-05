@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::error::Error;
 use crate::config::Config;
+use crate::proxy::ProxyMetrics;
 use self::metrics::MetricsCollector;
 
 /// Telemetry service
@@ -24,30 +25,30 @@ impl TelemetryService {
             metrics: None,
         }
     }
-    
+
     /// Initialize the telemetry service
     pub async fn init(&mut self) -> Result<(), Error> {
         // Initialize logging
         logging::init_logging(&self.config)?;
-        
+
         // Initialize distributed tracing
         tracing::init_tracing(&self.config)?;
-        
+
         // Initialize metrics collection
         if self.config.telemetry.enable_metrics {
             let metrics = MetricsCollector::new(self.config.clone())?;
             metrics.start_metrics_server().await?;
             self.metrics = Some(metrics);
         }
-        
+
         Ok(())
     }
-    
+
     /// Get the metrics collector
     pub fn metrics(&self) -> Option<&MetricsCollector> {
         self.metrics.as_ref()
     }
-    
+
     /// Shutdown the telemetry service
     pub fn shutdown(&self) {
         // Shutdown the tracer
@@ -58,12 +59,9 @@ impl TelemetryService {
 /// Set up the telemetry system
 pub fn setup_telemetry(config: Arc<Config>) -> Result<Arc<ProxyMetrics>, Error> {
     // Create a proxy metrics collector
-    let metrics = Arc::new(proxy::types::ProxyMetrics::new(
+    let metrics = Arc::new(ProxyMetrics::new(
         config.telemetry.enable_metrics,
     ));
-    
+
     Ok(metrics)
 }
-
-// Re-export key types
-pub use crate::proxy::types::ProxyMetrics;

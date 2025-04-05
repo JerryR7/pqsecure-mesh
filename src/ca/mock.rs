@@ -50,7 +50,7 @@ impl MockCaClient {
     /// Generate a random serial number
     fn generate_serial() -> String {
         let mut rng = rand::thread_rng();
-        let serial = format!("MOCK{:016X}", rng.gen::<u64>());
+        let serial = format!("MOCK{:016X}", rng.r#gen::<u64>());
         serial
     }
     
