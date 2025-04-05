@@ -67,21 +67,49 @@ PQSecure Mesh follows **Clean Architecture** principles and a modular design:
 
 ```
 pqsecure-mesh/
+├── Cargo.toml                 # Project dependencies
 ├── src/
-│   ├── identity/       - Identity management
-│   ├── crypto/         - Cryptographic features
-│   ├── proxy/          - Proxy functionality
-│   ├── policy/         - Policy engine
-│   ├── ca/             - CA integration
-│   ├── api/            - REST API
-│   ├── controller/     - Control logic
-│   ├── telemetry/      - Telemetry and monitoring
-│   └── utils/          - Utility functions
-├── config/             - Configuration files
-├── data/               - Runtime data (e.g., certificates, policies)
-├── Dockerfile          - Docker build file
-├── docker-compose.yml  - Docker Compose configuration
-└── Makefile            - Development and build commands
+│   ├── common/                # Common types and error definitions
+│   │   ├── mod.rs
+│   │   ├── error.rs           # Error types
+│   │   └── types.rs           # Common types
+│   ├── config/                # Configuration management
+│   │   ├── mod.rs
+│   │   └── settings.rs        # Core settings
+│   ├── identity/              # Identity management
+│   │   ├── mod.rs
+│   │   ├── provider.rs        # Identity provider interface
+│   │   ├── service.rs         # Identity service implementation
+│   │   ├── spiffe.rs          # SPIFFE ID support
+│   │   └── types.rs           # Identity-related types
+│   ├── crypto/                # Cryptographic functions
+│   │   ├── mod.rs
+│   │   ├── pqc.rs             # Post-quantum cryptography support
+│   │   ├── tls.rs             # TLS functions
+│   │   └── x509.rs            # X.509 certificate operations
+│   ├── ca/                    # Certificate management
+│   │   ├── mod.rs
+│   │   ├── provider.rs        # CA provider interface
+│   │   ├── smallstep.rs       # Smallstep CA integration
+│   │   └── types.rs           # CA-related types
+│   ├── policy/                # Policy engine
+│   │   ├── mod.rs
+│   │   ├── engine.rs          # Policy engine core
+│   │   ├── store.rs           # Policy storage
+│   │   └── types.rs           # Policy-related types
+│   ├── proxy/                 # Proxy functions
+│   │   ├── mod.rs
+│   │   ├── http.rs            # HTTP proxy
+│   │   ├── grpc.rs            # gRPC proxy
+│   │   ├── sidecar.rs         # Sidecar management
+│   │   └── types.rs           # Proxy-related types
+│   ├── telemetry/             # Monitoring and logging
+│   │   ├── mod.rs
+│   │   ├── logging.rs         # Logging functions
+│   │   └── metrics.rs         # Monitoring metrics
+│   └── main.rs                # Application entry point
+├── .env.example               # Environment variable example
+└── README.md                  # Project documentation
 ```
 
 ## 📝 API Reference
