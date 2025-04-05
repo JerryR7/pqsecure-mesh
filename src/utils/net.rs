@@ -126,7 +126,7 @@ impl NetUtils {
                 
                 // Check if within the network range
                 for i in 0..full_bytes {
-                    if ip_bytes[i as usize] != network_bytes[i as usize]) {
+                    if ip_bytes[i as usize] != network_bytes[i as usize] { // 修正：移除了額外的括號
                         return Ok(false);
                     }
                 }
