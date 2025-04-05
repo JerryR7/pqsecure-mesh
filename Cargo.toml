@@ -1,7 +1,7 @@
 [package]
 name = "pqsecure-mesh"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["Jerry <vp780412@gmail.com>"]
 description = "Post-Quantum Secure Proxy for Microservices"
 readme = "README.md"
@@ -24,6 +24,7 @@ prost = "0.11"
 # Serialization/Deserialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Configuration management
 config = "0.13"
@@ -57,7 +58,7 @@ base64 = "0.21"
 
 # Distributed tracing
 opentelemetry = { version = "0.19", features = ["rt-tokio"] }
-opentelemetry-jaeger = { version = "0.18", features = ["rt-tokio"] }
+opentelemetry-jaeger = { version = "0.19", features = ["rt-tokio"] }
 
 # Monitoring
 prometheus = "0.13"

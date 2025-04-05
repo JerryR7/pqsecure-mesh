@@ -5,6 +5,7 @@ use axum::{
 };
 use serde_json::json;
 use std::fmt;
+use chrono::Utc;
 
 /// API specific error types
 #[derive(Debug, thiserror::Error)]
@@ -53,7 +54,8 @@ impl IntoResponse for ApiError {
         // Create JSON response
         let body = Json(json!({
             "success": false,
-            "error": error_message
+            "error": error_message,
+            "timestamp": Utc::now().to_rfc3339()
         }));
 
         // Return response with status code and JSON body
