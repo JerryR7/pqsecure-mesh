@@ -9,49 +9,49 @@ license = "BSL-1.1"
 repository = "https://github.com/JerryR7/pqsecure-mesh"
 
 [dependencies]
-# Asynchronous runtime
-tokio = { version = "1.44.2", features = ["full"] }
+# gRPC support with high concurrency
+tonic = { version = "0.10", features = ["tls"] }
+tokio = { version = "1.36", features = ["full"] }
 
-# Web framework
-axum = { version = "0.8.3", features = ["headers"] }
-tower = { version = "0.5.2" }
-tower-http = { version = "0.6.2", features = ["trace", "cors"] }
+# TLS + mTLS support (we'll patch rustls with oqs-openssl later)
+rustls = "0.21"
+tokio-rustls = "0.25"
 
-# Serialization/Deserialization
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-serde_yaml = "0.9.34"
+# SPIFFE / SVID parsing & validation
+spiffe = "0.7"
 
-# Configuration management
-config = "0.15.11"
-dotenvy = "0.15.7"
+# X.509 Certificate parsing & CSR generation
+rcgen = "0.11"
+x509-parser = "0.15"
 
-# HTTP client
-reqwest = { version = "0.12.15", features = ["json"] }
+# HTTP/REST client for Smallstep CA API
+reqwest = { version = "0.12", features = ["json", "tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
-# Logging
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+# Logging and telemetry
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+opentelemetry = "0.20"
+opentelemetry-otlp = "0.15"
+
+# Policy / ACL parsing
+serde_yaml = "0.9"
+regex = "1"
+
+# WASM plugin engine (for future ACL support)
+wasmtime = { version = "12", optional = true }
 
 # Error handling
-thiserror = "2.0.12"
+anyhow = "1"
+thiserror = "1"
 
-# Cryptography
-rustls = "0.23.25"
-rustls-pemfile = "2.2.0"
-rcgen = "0.13.2"
-tokio-rustls = "0.26.2"
-rand = "0.9.0"
+# JSON schema validation if needed
+schemars = "0.8"
 
-# Monitoring
-prometheus = "0.14.0"
+# PQC support (you’ll compile OpenSSL with OQS provider separately)
+openssl = { version = "0.10", features = ["vendored"] }
 
-# Other utilities
-async-trait = "0.1.88"
-uuid = { version = "1.16.0", features = ["v4", "serde"] }
-url = "2.5.4"
-chrono = { version = "0.4.40", features = ["serde"] }
-
-[dev-dependencies]
-tokio-test = "0.4.4"
-mockall = "0.13.1"
+[features]
+default = []
+wasm_policy = ["wasmtime"]
