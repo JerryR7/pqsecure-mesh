@@ -18,14 +18,14 @@ rustls = "0.21"
 tokio-rustls = "0.25"
 
 # SPIFFE / SVID parsing & validation
-spiffe = "0.7"
+spiffe = "0.6.5"
 
 # X.509 Certificate parsing & CSR generation
 rcgen = "0.11"
 x509-parser = "0.15"
 
 # HTTP/REST client for Smallstep CA API
-reqwest = { version = "0.12", features = ["json", "tls"] }
+reqwest = { version = "0.11.27", features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
