@@ -15,7 +15,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # TLS and encryption related
-rustls = { version = "0.21.0", features = ["dangerous_configuration"] }
+rustls = { version = "0.23.25" }
 tokio-rustls = "0.26.2"
 rustls-pemfile = "2.2.0"
 rcgen = "0.13.2"
