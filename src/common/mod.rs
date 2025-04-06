@@ -1,5 +1,7 @@
-pub mod error;
+pub mod errors;
 pub mod types;
+pub mod utils;
 
-pub use error::Error;
-pub use types::{Result, ProtocolType};
+pub use errors::*;
+pub use types::*;
+pub use utils::*;

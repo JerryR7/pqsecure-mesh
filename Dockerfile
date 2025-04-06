@@ -1,48 +1,49 @@
-FROM rust:1.73 as builder
-
-WORKDIR /usr/src/pqsecure-mesh
-COPY . .
-
-# Install dependencies and build the project
-RUN cargo build --release
-
-# Use a smaller base image
-FROM debian:bullseye-slim
-
-# Install necessary SSL libraries and CA certificates
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+FROM rust:1.72 as builder
 
 WORKDIR /app
 
-# Copy the binary from the build stage
-COPY --from=builder /usr/src/pqsecure-mesh/target/release/pqsecure-mesh /app/
-# Copy configuration files and policies
-COPY --from=builder /usr/src/pqsecure-mesh/config /app/config
-# Create necessary directories
-RUN mkdir -p /app/data/certs /app/data/identity
+# Copy over manifests and src
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 
-# Set default environment variables
-ENV PQSM__GENERAL__APP_NAME="PQSecure Mesh"
-ENV PQSM__GENERAL__MODE="sidecar"
-ENV PQSM__GENERAL__LOG_LEVEL="info"
-ENV PQSM__GENERAL__DATA_DIR="/app/data"
+# Build with optimizations
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release && \
+    cp target/release/pqsecure-mesh /app/pqsecure-mesh
 
-ENV PQSM__API__LISTEN_ADDR="0.0.0.0"
-ENV PQSM__API__LISTEN_PORT="8080"
-ENV PQSM__API__PATH_PREFIX="/api/v1"
+# Create runtime image
+FROM debian:bookworm-slim
 
-ENV PQSM__PROXY__LISTEN_ADDR="0.0.0.0"
-ENV PQSM__PROXY__LISTEN_PORT="9090"
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-ENV PQSM__CERT__ENABLE_MTLS="true"
-ENV PQSM__CERT__ENABLE_PQC="true"
-ENV PQSM__CERT__CA_TYPE="mock"
+# Create non-root user and directories
+RUN useradd -m -u 1000 -s /bin/bash pqsecure && \
+    mkdir -p /app/config /app/certs && \
+    chown -R pqsecure:pqsecure /app
 
-# Expose API and Proxy ports
-EXPOSE 8080 9090 9091
+# Copy binary from builder
+COPY --from=builder /app/pqsecure-mesh /app/pqsecure-mesh
 
-# Run the application
+# Copy config files
+COPY config/ /app/config/
+
+# Set permissions
+RUN chmod +x /app/pqsecure-mesh && \
+    chown -R pqsecure:pqsecure /app
+
+# Switch to non-root user
+USER pqsecure
+WORKDIR /app
+
+# Set environment variables
+ENV RUST_LOG=info
+
+# Expose port
+EXPOSE 8443
+
+# Run the service
 CMD ["/app/pqsecure-mesh"]

@@ -1,170 +1,104 @@
+use anyhow::Result;
+use pqsecure_mesh::{
+    ca::SmallstepClient,
+    config::{load_config, Config},
+    crypto::build_tls_config,
+    identity::SpiffeVerifier,
+    policy::YamlPolicyEngine,
+    proxy::{
+        handler::DefaultConnectionHandler,
+        pqc_acceptor::PqcAcceptor,
+        protocol::{grpc::GrpcHandler, http_tls::HttpHandler, raw_tcp::TcpHandler},
+    },
+    telemetry,
+};
 use std::sync::Arc;
 use tokio::signal;
-use tracing::{info, warn, error};
-
-mod common;
-mod config;
-mod identity;
-mod crypto;
-mod ca;
-mod policy;
-mod proxy;
-mod telemetry;
-
-use common::{Error, Result, ProtocolType};
-use config::Settings;
-use identity::IdentityService;
-use policy::{PolicyEngine, PolicyEvaluator, FilePolicyStore};
-use proxy::{SidecarProxy, SidecarConfig, MtlsConfig, ProxyMetrics};
-
-/// Run mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RunMode {
-    /// Sidecar mode
-    Sidecar,
-    /// Controller mode (not implemented in simplified version)
-    Controller,
-}
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load configuration
-    let config = match Settings::load() {
-        Ok(cfg) => {
-            Arc::new(cfg)
-        },
-        Err(e) => {
-            eprintln!("Failed to load configuration: {}", e);
-            eprintln!("Using default configuration");
-            Arc::new(Settings::default())
-        }
-    };
+    // 1. Initialize telemetry first
+    telemetry::init()?;
+    info!("Starting PQSecure Mesh...");
 
-    // Initialize logging system
-    telemetry::init_logging(&config)?;
+    // 2. Load configuration
+    let config = load_config()?;
+    info!("Configuration loaded successfully");
 
-    info!("Starting PQSecure Mesh");
+    // 3. Create directories for certificates if they don't exist
+    std::fs::create_dir_all(std::path::Path::new(&config.ca.cert_path).parent().unwrap_or(std::path::Path::new("./certs"))).ok();
 
-    // Parse run mode
-    let mode = match config.general.mode.as_str() {
-        "sidecar" => RunMode::Sidecar,
-        "controller" => RunMode::Controller,
-        _ => {
-            warn!("Unknown mode: {}, defaulting to sidecar", config.general.mode);
-            RunMode::Sidecar
-        }
-    };
+    // 4. Initialize Smallstep CA client and fetch certificates
+    let ca_client = SmallstepClient::new(&config.ca)?;
+    let (cert_chain, private_key) = ca_client.load_or_request_cert().await?;
+    info!("Certificate loaded successfully");
 
-    match mode {
-        RunMode::Sidecar => {
-            // Run in sidecar mode
-            info!("Starting in sidecar mode");
-            run_sidecar_mode(config).await?;
-        },
-        RunMode::Controller => {
-            // Run in controller mode (not implemented in simplified version)
-            info!("Controller mode not implemented in this version");
-            return Err(Error::Internal("Controller mode not implemented".into()));
-        },
+    // 5. Initialize policy engine
+    let policy_engine = Arc::new(YamlPolicyEngine::from_path(&config.policy.path)?);
+    info!("Policy engine initialized with rules from {}", config.policy.path);
+
+    // 6. Setup SPIFFE verifier
+    let spiffe_verifier = Arc::new(SpiffeVerifier::new(config.identity.trusted_domain.clone()));
+
+    // 7. Setup TLS configuration
+    let tls_config = build_tls_config(cert_chain, private_key, spiffe_verifier.clone())?;
+    info!("TLS configuration built successfully");
+
+    // 8. Setup protocol handlers based on config
+    let mut handlers = Vec::new();
+    if config.proxy.protocols.tcp {
+        let tcp_handler = TcpHandler::new(
+            config.proxy.backend.clone(),
+            policy_engine.clone(),
+            spiffe_verifier.clone(),
+        )?;
+        handlers.push(Arc::new(tcp_handler) as Arc<dyn DefaultConnectionHandler>);
+        info!("TCP protocol handler initialized");
     }
 
-    info!("PQSecure Mesh shutting down");
-    Ok(())
-}
-
-/// Sidecar mode run logic
-async fn run_sidecar_mode(config: Arc<Settings>) -> Result<()> {
-    // Create metrics collector
-    let metrics = Arc::new(ProxyMetrics::new());
-
-    // Create CA provider
-    let ca_provider = ca::create_ca_provider(config.clone())?;
-
-    // Create identity provider
-    let identity_provider = Arc::new(IdentityService::new(
-        ca_provider,
-        config.clone(),
-    ));
-
-    // Create policy engine
-    let policy_store = Arc::new(FilePolicyStore::new(config.clone()));
-    let policy_evaluator = Arc::new(PolicyEvaluator::new());
-    let policy_engine = Arc::new(PolicyEngine::new(
-        policy_store,
-        policy_evaluator,
-    ));
-
-    // Create sidecar configuration
-    let protocol = match config.proxy.protocol.as_str() {
-        "http" => ProtocolType::Http,
-        "grpc" => ProtocolType::Grpc,
-        _ => {
-            warn!("Unknown protocol: {}, defaulting to HTTP", config.proxy.protocol);
-            ProtocolType::Http
-        }
-    };
-
-    let sidecar_config = SidecarConfig {
-        listen_addr: config.proxy.listen_addr.clone(),
-        listen_port: config.proxy.listen_port,
-        upstream_addr: config.proxy.upstream_addr.clone(),
-        upstream_port: config.proxy.upstream_port,
-        tenant_id: config.identity.tenant.clone(),
-        service_id: config.identity.service.clone(),
-        protocol,
-        mtls_config: MtlsConfig {
-            enable_mtls: config.cert.enable_mtls,
-            enable_pqc: config.cert.enable_pqc,
-        },
-    };
-
-    // Create and start sidecar proxy
-    let sidecar = SidecarProxy::new(
-        sidecar_config,
-        identity_provider,
-        policy_engine,
-        metrics,
-    );
-
-    // Start the proxy
-    tokio::select! {
-        result = sidecar.start() => {
-            if let Err(e) = result {
-                error!("Sidecar proxy error: {}", e);
-                return Err(e);
-            }
-        },
-        _ = wait_for_shutdown_signal() => {
-            info!("Received shutdown signal, stopping sidecar");
-        }
+    if config.proxy.protocols.http {
+        let http_handler = HttpHandler::new(
+            config.proxy.backend.clone(),
+            policy_engine.clone(),
+            spiffe_verifier.clone(),
+        )?;
+        handlers.push(Arc::new(http_handler) as Arc<dyn DefaultConnectionHandler>);
+        info!("HTTP protocol handler initialized");
     }
+
+    if config.proxy.protocols.grpc {
+        let grpc_handler = GrpcHandler::new(
+            config.proxy.backend.clone(),
+            policy_engine.clone(),
+            spiffe_verifier.clone(),
+        )?;
+        handlers.push(Arc::new(grpc_handler) as Arc<dyn DefaultConnectionHandler>);
+        info!("gRPC protocol handler initialized");
+    }
+
+    // 9. Create connection acceptor
+    let acceptor = PqcAcceptor::new(
+        config.proxy.listen_addr.to_string(),
+        tls_config,
+        handlers,
+    )?;
+
+    // 10. Start the proxy
+    let proxy_task = tokio::spawn(async move {
+        if let Err(e) = acceptor.run().await {
+            error!("Proxy error: {}", e);
+        }
+    });
+
+    // 11. Wait for shutdown signal
+    info!("PQSecure Mesh started successfully and listening on {}", config.proxy.listen_addr);
+    signal::ctrl_c().await?;
+    info!("Shutdown signal received, stopping PQSecure Mesh...");
+
+    // Proper cleanup before exit
+    proxy_task.abort();
+    info!("PQSecure Mesh stopped successfully");
 
     Ok(())
-}
-
-/// Wait for shutdown signal
-async fn wait_for_shutdown_signal() {
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install signal handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-
-    info!("Shutdown signal received");
 }
