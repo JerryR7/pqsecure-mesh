@@ -132,7 +132,6 @@ pub fn build_tls_config(
     // Create custom certificate verifier
     let client_cert_verifier = Arc::new(CustomClientCertVerifier::new(spiffe_verifier));
 
-    // 使用新版API建立設定
     let mut config = ServerConfig::builder()
         .with_client_cert_verifier(client_cert_verifier)
         .with_single_cert(cert_chain, private_key)

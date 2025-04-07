@@ -38,3 +38,8 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Sample files and test files
+/sample/
+/test/nginx/
+/test/data/
