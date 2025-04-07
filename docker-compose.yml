@@ -1,163 +1,62 @@
+version: "3.8"
+
 services:
-  pqsecure-controller:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: pqsecure-controller
-    ports:
-      - "8080:8080"  # REST API
-    volumes:
-      - pqsecure_data:/app/data
-      - ./config:/app/config
-    environment:
-      - PQSM__GENERAL__MODE=controller
-      - PQSM__GENERAL__LOG_LEVEL=debug
-      - PQSM__CERT__CA_TYPE=smallstep
-      - PQSM__CERT__CA_URL=http://step-ca:9000
-      - PQSM__IDENTITY__TENANT=default
-      - PQSM__IDENTITY__SERVICE=controller
-      - PQSM__TELEMETRY__ENABLE_METRICS=true
-      - PQSM__TELEMETRY__METRICS_PORT=9091
-    networks:
-      - pqsecure-network
-    depends_on:
-      - step-ca
-
-  service-a-sidecar:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: service-a-sidecar
-    ports:
-      - "9090:9090"  # Proxy
-      - "9081:9091"  # Metrics
-    volumes:
-      - pqsecure_data:/app/data
-      - ./config:/app/config
-    environment:
-      - PQSM__GENERAL__MODE=sidecar
-      - PQSM__GENERAL__LOG_LEVEL=debug
-      - PQSM__CERT__CA_TYPE=smallstep
-      - PQSM__CERT__CA_URL=http://step-ca:9000
-      - PQSM__IDENTITY__TENANT=default
-      - PQSM__IDENTITY__SERVICE=service-a
-      - PQSM__PROXY__LISTEN_ADDR=0.0.0.0
-      - PQSM__PROXY__LISTEN_PORT=9090
-      - PQSM__PROXY__UPSTREAM_ADDR=service-a
-      - PQSM__PROXY__UPSTREAM_PORT=80
-      - PQSM__PROXY__PROTOCOL=http
-      - PQSM__TELEMETRY__ENABLE_METRICS=true
-      - PQSM__TELEMETRY__METRICS_PORT=9091
-    networks:
-      - pqsecure-network
-    depends_on:
-      - step-ca
-      - service-a
-
-  service-b-sidecar:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: service-b-sidecar
-    ports:
-      - "9091:9090"  # Proxy
-      - "9082:9091"  # Metrics
-    volumes:
-      - pqsecure_data:/app/data
-      - ./config:/app/config
-    environment:
-      - PQSM__GENERAL__MODE=sidecar
-      - PQSM__GENERAL__LOG_LEVEL=debug
-      - PQSM__CERT__CA_TYPE=smallstep
-      - PQSM__CERT__CA_URL=http://step-ca:9000
-      - PQSM__IDENTITY__TENANT=default
-      - PQSM__IDENTITY__SERVICE=service-b
-      - PQSM__PROXY__LISTEN_ADDR=0.0.0.0
-      - PQSM__PROXY__LISTEN_PORT=9090
-      - PQSM__PROXY__UPSTREAM_ADDR=service-b
-      - PQSM__PROXY__UPSTREAM_PORT=80
-      - PQSM__PROXY__PROTOCOL=http
-      - PQSM__TELEMETRY__ENABLE_METRICS=true
-      - PQSM__TELEMETRY__METRICS_PORT=9091
-    networks:
-      - pqsecure-network
-    depends_on:
-      - step-ca
-      - service-b
-
+  # Smallstep CA service
   step-ca:
     image: smallstep/step-ca:latest
     container_name: step-ca
-    restart: unless-stopped
+    volumes:
+      - ./step:/home/step
     ports:
       - "9000:9000"
-    volumes:
-      - step_ca_data:/home/step
     environment:
       - DOCKER_STEPCA_INIT_NAME=PQSecure Mesh CA
-      - DOCKER_STEPCA_INIT_DNS_NAMES=localhost,step-ca
-      - DOCKER_STEPCA_INIT_PROVISIONER_NAME=admin
-    networks:
-      - pqsecure-network
+      - DOCKER_STEPCA_INIT_DNS=localhost
+      - DOCKER_STEPCA_INIT_ADDRESS=:9000
+      - DOCKER_STEPCA_INIT_PROVISIONER=pqsecure-admin
+      - DOCKER_STEPCA_INIT_PASSWORD=123456
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-O", "-", "https://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  # Test microservice A
-  service-a:
+  # Backend API service (simulating EDR manager)
+  backend:
     image: nginx:alpine
-    container_name: service-a
-    networks:
-      - pqsecure-network
+    container_name: pqsecure-backend
     volumes:
-      - ./test/service-a:/usr/share/nginx/html
-
-  # Test microservice B
-  service-b:
-    image: nginx:alpine
-    container_name: service-b
-    networks:
-      - pqsecure-network
-    volumes:
-      - ./test/service-b:/usr/share/nginx/html
-
-  # Monitoring service
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
+      - ./sample/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./sample/html:/usr/share/nginx/html
     ports:
-      - "9090:9090"
-    volumes:
-      - ./config/prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    networks:
-      - pqsecure-network
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-O", "-", "http://127.0.0.1:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  # Monitoring dashboard
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
+  # PQSecure Mesh proxy
+  pqsecure-mesh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pqsecure-mesh
     volumes:
-      - grafana_data:/var/lib/grafana
-      - ./config/grafana:/etc/grafana/provisioning
+      - ./config:/app/config
+      - ./certs:/app/certs
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    networks:
-      - pqsecure-network
+      - RUST_LOG=info
+      - PQSECURE_CA_API_URL=https://step-ca:9000
+      - PQSECURE_BACKEND_ADDR=backend:8080
+      - PQSECURE_CA_TOKEN=${SMALLSTEP_TOKEN:-default-testing-token}
+    ports:
+      - "8443:8443"
     depends_on:
-      - prometheus
-
-volumes:
-  pqsecure_data:
-  step_ca_data:
-  prometheus_data:
-  grafana_data:
-
-networks:
-  pqsecure-network:
-    driver: bridge
+      step-ca:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

@@ -13,7 +13,7 @@ Post-Quantum Secure Zero Trust Proxy for Microservices – powered by Rust
 - **Multi-Protocol Support** – Works with HTTP, gRPC, and generic TCP protocols
 - **Policy-Driven Access Control** – Flexible access control with YAML-based policies
 - **Seamless Smallstep CA Integration** – Integrates smoothly with modern PKI solutions
-- **Multi-Tenant Isolation** – Full support for isolated multi-tenant deployments
+- **Built with Rust** – High-performance, memory-safe implementation with async I/O
 
 ## 📋 Project Overview
 
@@ -37,11 +37,18 @@ cd pqsecure-mesh
 # Build the project
 cargo build --release
 
-# Initialize environment
-make init
+# Create required directories
+mkdir -p certs config
 
-# Run in sidecar mode
-PQSM__GENERAL__MODE=sidecar ./target/release/pqsecure-mesh
+# Setup example config
+cp config/config.yaml.example.example config/config.yaml.example
+cp config/policy.yaml.example.example config/policy.yaml.example
+
+# Edit configurations with your settings
+# You'll need to configure Smallstep CA connection
+
+# Run the service
+RUST_LOG=info ./target/release/pqsecure-mesh
 ```
 
 ### Using Docker
@@ -51,132 +58,176 @@ PQSM__GENERAL__MODE=sidecar ./target/release/pqsecure-mesh
 docker build -t pqsecure-mesh .
 
 # Run the container
-docker run -p 8080:8080 -p 9090:9090 -e PQSM__GENERAL__MODE=sidecar pqsecure-mesh
-```
-
-### Full Environment with Docker Compose
-
-```bash
-# Start the full environment with test services
-docker compose up -d
+docker run -p 8443:8443 \
+  -v $(pwd)/config:/app/config \
+  -v $(pwd)/certs:/app/certs \
+  -e SMALLSTEP_TOKEN=your_token_here \
+  -e RUST_LOG=info \
+  pqsecure-mesh
 ```
 
 ## 📚 Architecture
 
-PQSecure Mesh follows **Clean Architecture** principles and a modular design:
+PQSecure Mesh follows a modular design with clean separation of concerns:
 
 ```
-pqsecure-mesh/
-├── src/
-│   ├── identity/       - Identity management
-│   ├── crypto/         - Cryptographic features
-│   ├── proxy/          - Proxy functionality
-│   ├── policy/         - Policy engine
-│   ├── ca/             - CA integration
-│   ├── api/            - REST API
-│   ├── controller/     - Control logic
-│   ├── telemetry/      - Telemetry and monitoring
-│   └── utils/          - Utility functions
-├── config/             - Configuration files
-├── data/               - Runtime data (e.g., certificates, policies)
-├── Dockerfile          - Docker build file
-├── docker-compose.yml  - Docker Compose configuration
-└── Makefile            - Development and build commands
+src/
+├── main.rs                    # Program entry point
+├── config/                    # Configuration management (serde_yaml + env)
+│   └── mod.rs
+├── telemetry/                 # tracing, OTEL support
+│   └── mod.rs
+├── common/                    # Shared DTO, errors, utilities
+│   ├── types.rs               # DTO / base data models
+│   ├── errors.rs              # thiserror definitions
+│   └── utils.rs               # Common functions
+├── identity/                  # SPIFFE identity verification module
+│   └── verifier.rs            # SPIFFE ID checker
+├── ca/                        # Smallstep CA certificate integration
+│   ├── client.rs              # Smallstep API client
+│   └── csr.rs                 # rcgen CSR request logic
+├── crypto/                    # TLS + PQC certificate verifier
+│   └── pqc_verifier.rs        # Custom rustls verifier
+├── proxy/                     # Proxy module
+│   ├── handler.rs             # trait: ConnectionHandler
+│   ├── pqc_acceptor.rs        # TLS Listener
+│   ├── forwarder.rs           # tokio::copy_bidirectional
+│   └── protocol/              # Multi-protocol implementation
+│       ├── raw_tcp.rs
+│       ├── grpc.rs
+│       └── http_tls.rs
+├── policy/                    # ACL decision module
+│   ├── engine.rs              # trait: PolicyEngine + evaluator
+│   └── model.rs               # ACL rule definitions
 ```
 
-## 📝 API Reference
+## ⚙️ Configuration
 
-### Request Identity
+PQSecure Mesh is configured through YAML files and environment variables:
 
-```bash
-curl -X POST http://localhost:8080/api/v1/identity/request \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_name": "my-service",
-    "namespace": "default",
-    "pqc_enabled": true
-  }'
+### Main Configuration
+
+```yaml
+# config/config.yaml.example
+ca:
+  api_url: "https://ca.example.com:9000"
+  cert_path: "./certs/cert.pem"
+  key_path: "./certs/key.pem"
+  token: "${SMALLSTEP_TOKEN}"
+  spiffe_id: "spiffe://example.org/service/pqsecure-mesh"
+
+identity:
+  trusted_domain: "example.org"
+
+policy:
+  path: "./config/policy.yaml.example"
+
+proxy:
+  listen_addr: "0.0.0.0:8443"
+  backend:
+    address: "127.0.0.1:8080"
+    timeout_seconds: 30
+  protocols:
+    tcp: true
+    http: true
+    grpc: true
+
+telemetry:
+  otel_endpoint: "http://otel-collector:4317"
+  service_name: "pqsecure-mesh"
 ```
 
-### Revoke Identity
-
-```bash
-curl -X POST http://localhost:8080/api/v1/identity/revoke \
-  -H "Content-Type: application/json" \
-  -d '{
-    "spiffe_id": "spiffe://default/my-service",
-    "reason": "keyCompromise"
-  }'
-```
-
-### Manage Policies
-
-```bash
-# Create policy
-curl -X POST http://localhost:8080/api/v1/policy \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "my-service-policy",
-    "allow_from": [
-      {"id": "spiffe://default/service-a"},
-      {"id": "spiffe://default/service-b"}
-    ],
-    "allow_methods": [
-      {"Http": ["GET", "/api/v1/resource"]},
-      {"Grpc": ["my.service.Method"]}
-    ]
-  }'
-```
-
-## 🔗 Smallstep CA Integration
-
-PQSecure Mesh integrates smoothly with Smallstep CA:
-
-```bash
-# Start Smallstep CA
-docker run -p 9000:9000 \
-  -v $PWD/step:/home/step \
-  smallstep/step-ca
-
-# Configure PQSecure Mesh
-export PQSM__CERT__CA_TYPE=smallstep
-export PQSM__CERT__CA_URL=https://ca.example.com
-export PQSM__CERT__CA_TOKEN=your-bootstrap-token
-```
-
-## ⚙️ Policy Configuration
+### Policy Configuration
 
 Access control policies are defined in YAML:
 
 ```yaml
-# policy.yaml
-id: web-backend
-allow_from:
-  - id: "spiffe://default/frontend"
-  - id: "spiffe://monitoring/prometheus"
-allow_methods:
-  - Http: ["GET", "/api/v1/users"]
-  - Http: ["POST", "/api/v1/users"]
-  - Grpc: ["user.service.GetUser"]
-deny_rules:
-  - ip: "10.0.0.0/8"
+# config/policy.yaml.example
+default_action: false
+rules:
+  # Allow all connections from monitoring
+  - spiffe_id: "spiffe://example.org/service/monitoring"
+    allow: true
+  
+  # Allow specific HTTP endpoints
+  - spiffe_id: "spiffe://example.org/service/web"
+    protocol: "http"
+    method: "regex:^GET /api/v1/.*$"
+    allow: true
+  
+  # Allow specific gRPC methods
+  - spiffe_id: "spiffe://example.org/service/api"
+    protocol: "grpc"
+    method: "regex:^api\\..*Service/Get.*$"
+    allow: true
+  
+  # Allow all connections matching a pattern
+  - spiffe_id: "regex:spiffe://example.org/service/mesh-.*"
+    allow: true
 ```
 
-## 📊 Monitoring & Metrics
+## 🔗 Smallstep CA Integration
 
-PQSecure Mesh provides rich observability:
+PQSecure Mesh integrates with Smallstep CA for certificate management:
 
-- **Prometheus Metrics**: Available at the `/metrics` endpoint
-- **OpenTelemetry Tracing**: Integrates with Jaeger and other tracing systems
-- **Structured Logging**: Outputs logs in structured JSON format
+```bash
+# Install step CLI
+step ca bootstrap --ca-url https://ca.example.com:9000 --fingerprint <fingerprint>
+
+# Generate a provisioning token
+TOKEN=$(step ca token service-name --ca-url https://ca.example.com:9000)
+
+# Configure PQSecure Mesh
+export SMALLSTEP_TOKEN=$TOKEN
+```
+
+## 📊 Telemetry
+
+PQSecure Mesh provides rich observability through structured logging and metrics:
+
+- **Structured Logging**: Outputs detailed logs through the tracing framework
+- **Environment Configuration**: Set the log level via `RUST_LOG` (e.g., `info`, `debug`)
+
+Example logging output:
+```
+2025-04-07T10:15:23Z INFO pqsecure_mesh::proxy::pqc_acceptor: PQC acceptor listening on 0.0.0.0:8443
+2025-04-07T10:15:30Z INFO pqsecure_mesh::telemetry: Connection successful source="192.168.1.5:52436"
+2025-04-07T10:15:30Z INFO pqsecure_mesh::telemetry: Policy decision spiffe_id="spiffe://example.org/service/web" method="GET /api/v1/users" allowed=true
+```
+
+## 🛡️ Security Architecture
+
+PQSecure Mesh implements a comprehensive security model:
+
+1. **Endpoint Security**: All connections must present valid X.509 certificates with SPIFFE IDs
+2. **Identity Verification**: SPIFFE IDs are validated against trusted domains
+3. **Policy Enforcement**: Access is granted according to configured ACL policies
+4. **Post-Quantum Protection**: TLS connections are secured against quantum computing threats
+5. **Zero Trust Model**: Every connection is verified, regardless of network location
+
+## 🧩 Future Expansions
+
+- **OpenSSL PQC Integration**: Future versions will support OpenSSL's post-quantum algorithms
+- **Gateway Mode**: Planned expansion to operate as an API gateway
+- **Advanced Protocol Detection**: Enhanced protocol type detection
+- **Enhanced Monitoring**: More detailed metrics and telemetry integration
+- **Mutual Authentication Federation**: Connect across different trust domains
 
 ## 👥 Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
+Contributions are welcome! Please follow these steps:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+All code should be formatted with `cargo fmt` and checked with `cargo clippy`.
 
 ## 📜 License
 
-This project is licensed under the **Business Source License 1.1 (BSL 1.1)**. See [LICENSE](LICENSE) for full terms.  
-Under the BSL, the code is freely available for non-production use. Production use requires a commercial license, unless the Change Date has passed.
+This project is licensed under the **Business Source License 1.1 (BSL 1.1)**. See [LICENSE](LICENSE) for full terms.
 
 ---
+
+Built with ❤️ using Rust's powerful async ecosystem

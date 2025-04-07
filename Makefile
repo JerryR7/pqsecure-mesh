@@ -1,151 +1,131 @@
-.PHONY: build run test clean docker docker-up docker-down
+.PHONY: build run clean test test-integration docker docker-compose init setup-ca cert setup-examples lint format help
+
+# Cargo commands
+CARGO := cargo
+# Docker commands
+DOCKER := docker
+DOCKER_COMPOSE := docker compose
+# Step CLI for certificates
+STEP := step
+
+# Project settings
+PROJECT_NAME := pqsecure-mesh
+VERSION := $(shell grep -m1 version Cargo.toml | cut -d\" -f2)
+BINARY := target/release/$(PROJECT_NAME)
 
 # Default target
-all: build
+.DEFAULT_GOAL := help
+
+# Help target
+help:
+	@echo "PQSecure Mesh Makefile"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make build            Build the release binary"
+	@echo "  make run              Run the program"
+	@echo "  make test             Run unit tests"
+	@echo "  make test-integration Run integration tests"
+	@echo "  make docker           Build Docker image"
+	@echo "  make docker-compose   Run with Docker Compose"
+	@echo "  make init             Initialize project (dirs, config)"
+	@echo "  make setup-ca         Setup Smallstep CA"
+	@echo "  make cert             Generate test certificates"
+	@echo "  make clean            Clean build artifacts"
+	@echo "  make lint             Run linters"
+	@echo "  make format           Format code"
+	@echo ""
 
 # Build the project
 build:
-	cargo build --release
+	@echo "Building $(PROJECT_NAME) v$(VERSION)..."
+	$(CARGO) build --release
 
-# Run the project (development mode)
-run:
-	cargo run
-
-# Run the project (controller mode)
-run-controller:
-	PQSM__GENERAL__MODE=controller cargo run
-
-# Run the project (sidecar mode)
-run-sidecar:
-	PQSM__GENERAL__MODE=sidecar cargo run
+# Run the project
+run: build
+	@echo "Running $(PROJECT_NAME)..."
+	RUST_LOG=info ./$(BINARY)
 
 # Run tests
 test:
-	cargo test
+	@echo "Running tests..."
+	$(CARGO) test
 
-# Clean build artifacts
-clean:
-	cargo clean
-	rm -rf ./data/certs ./data/identity
+# Run integration tests
+test-integration:
+	@echo "Running integration tests..."
+	$(CARGO) test --test '*' -- --ignored
 
 # Build Docker image
 docker:
-	docker build -t pqsecure-mesh .
+	@echo "Building Docker image..."
+	$(DOCKER) build -t $(PROJECT_NAME):$(VERSION) .
+	$(DOCKER) tag $(PROJECT_NAME):$(VERSION) $(PROJECT_NAME):latest
 
-# Start Docker Compose environment
-docker-up:
-	docker-compose up -d
+# Start with Docker Compose
+docker-compose:
+	@echo "Starting with Docker Compose..."
+	$(DOCKER_COMPOSE) up -d
 
-# Stop Docker Compose environment
-docker-down:
-	docker-compose down
-
-# Initialize project directories
+# Initialize project directories and configuration
 init:
-	mkdir -p ./data/certs ./data/identity
-	mkdir -p ./config
-	mkdir -p ./test/service-a
-	mkdir -p ./test/service-b
-	@if [ ! -f .env ]; then cp .env.example .env; fi
-	@if [ ! -f config/policy.yaml ]; then cp config/policy.yaml.example config/policy.yaml; fi
-	@echo "Project directories initialized!"
+	@echo "Initializing project..."
+	mkdir -p certs config sample/html
+	[ -f config/config.yaml ] || cp config/config.yaml.example config/config.yaml
+	[ -f config/policy.yaml ] || cp config/policy.yaml.example config/policy.yaml
 
-# Generate certificates (using mock CA)
+	@echo "Creating sample backend configuration..."
+	echo "server { listen 8080; root /usr/share/nginx/html; }" > sample/nginx.conf
+	echo "<html><body><h1>PQSecure Mesh Test Backend</h1></body></html>" > sample/html/index.html
+
+# Setup Smallstep CA
+setup-ca:
+	@echo "Setting up Smallstep CA..."
+	mkdir -p step
+	$(DOCKER) run --rm -v $(PWD)/step:/home/step smallstep/step-ca:latest step ca init \
+		--name="PQSecure Mesh CA" \
+		--dns="localhost" \
+		--address=":9000" \
+		--provisioner="pqsecure-admin" \
+		--password-file=/dev/stdin <<< "123456"
+	@echo "CA setup complete. Starting CA..."
+	$(DOCKER) run -d --name step-ca -p 9000:9000 -v $(PWD)/step:/home/step smallstep/step-ca:latest
+	sleep 2
+	$(DOCKER) exec step-ca step ca provisioner add acme --type ACME
+	@echo "CA is running. Bootstrap token:"
+	$(DOCKER) exec step-ca step ca token service-mesh --password 123456
+
+# Generate test certificates
 cert:
 	@echo "Generating test certificates..."
-	curl -X POST http://localhost:8080/api/v1/identity/request \
-		-H "Content-Type: application/json" \
-		-d '{"service_name": "$(SERVICE)", "namespace": "default"}'
-	@echo "\nCertificates generated and stored in ./data/identity/default/$(SERVICE)/"
+	$(STEP) ca certificate "test.example.org" certs/cert.pem certs/key.pem \
+		--ca-url https://localhost:9000 \
+		--root step/certs/root_ca.crt \
+		--not-after 24h \
+		--acme \
+		--force
 
-# Display help information
-help:
-	@echo "PQSecure Mesh development commands:"
-	@echo "  make build              Build the project"
-	@echo "  make run                Run the project (development mode)"
-	@echo "  make run-controller     Run the project (controller mode)"
-	@echo "  make run-sidecar        Run the project (sidecar mode)"
-	@echo "  make test               Run tests"
-	@echo "  make clean              Clean build artifacts"
-	@echo "  make docker             Build Docker image"
-	@echo "  make docker-up          Start Docker Compose environment"
-	@echo "  make docker-down        Stop Docker Compose environment"
-	@echo "  make init               Initialize project directories"
-	@echo "  make cert SERVICE=my-service  Generate certificates for the specified service"
-	@echo "  make help               Display help information"
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	$(CARGO) clean
+	rm -rf target/
 
-# Check code style
+# Run linter
 lint:
-	cargo clippy -- -D warnings
+	@echo "Running linter..."
+	$(CARGO) clippy -- -D warnings
 
 # Format code
-fmt:
-	cargo fmt
+format:
+	@echo "Formatting code..."
+	$(CARGO) fmt
 
-# Check code coverage
-coverage:
-	cargo tarpaulin --out Html --output-dir ./target/coverage
-
-# Generate documentation
-doc:
-	cargo doc --no-deps --open
-
-# Create release version
-release:
-	@echo "Creating release version..."
-	cargo build --release
-	mkdir -p ./release
-	cp ./target/release/pqsecure-mesh ./release/
-	cp -r ./config ./release/
-	tar -czvf pqsecure-mesh-release.tar.gz ./release
-	@echo "Release version created: pqsecure-mesh-release.tar.gz"
-
-# Build and push Docker image to registry
-docker-push:
-	@echo "Building and pushing Docker image..."
-	docker build -t pqsecure-mesh:latest .
-	docker tag pqsecure-mesh:latest $(REGISTRY)/pqsecure-mesh:latest
-	docker push $(REGISTRY)/pqsecure-mesh:latest
-	@echo "Docker image pushed to: $(REGISTRY)/pqsecure-mesh:latest"
-
-# Create Prometheus configuration
-prometheus-config:
-	@echo "Creating Prometheus configuration..."
-	mkdir -p ./config/prometheus
-	cp ./config/prometheus.yml.example ./config/prometheus/prometheus.yml
-	@echo "Prometheus configuration created: ./config/prometheus/prometheus.yml"
-
-# Create Grafana configuration
-grafana-config:
-	@echo "Creating Grafana configuration..."
-	mkdir -p ./config/grafana/dashboards
-	mkdir -p ./config/grafana/datasources
-	cp ./config/grafana-datasources.yml.example ./config/grafana/datasources/datasources.yml
-	cp ./config/grafana-dashboard.json.example ./config/grafana/dashboards/pqsecure-mesh.json
-	@echo "Grafana configuration created"
-
-# Create test service pages
-test-services:
-	@echo "Creating test service pages..."
-	mkdir -p ./test/service-a
-	mkdir -p ./test/service-b
-	cp ./test/service-a.html.example ./test/service-a/index.html
-	cp ./test/service-b.html.example ./test/service-b/index.html
-	@echo "Test service pages created"
-
-# Install development dependencies
-dev-deps:
-	cargo install cargo-tarpaulin
-	cargo install cargo-audit
-	cargo install cargo-outdated
-	@echo "Development dependencies installed"
-
-# Perform security checks
-security-check:
-	cargo audit
-	@echo "Security checks completed"
-
-# Check for outdated dependencies
-outdated:
-	cargo outdated
-	@echo "Outdated dependency check completed"
+# Package release
+release: build
+	@echo "Creating release package..."
+	mkdir -p release/$(PROJECT_NAME)-$(VERSION)
+	cp $(BINARY) release/$(PROJECT_NAME)-$(VERSION)/
+	cp -r config release/$(PROJECT_NAME)-$(VERSION)/
+	cp README.md LICENSE release/$(PROJECT_NAME)-$(VERSION)/
+	cd release && tar -czf $(PROJECT_NAME)-$(VERSION).tar.gz $(PROJECT_NAME)-$(VERSION)
+	@echo "Release package created at release/$(PROJECT_NAME)-$(VERSION).tar.gz"

@@ -1,9 +1,5 @@
-pub mod types;
-pub mod store;
-pub mod engine;
-pub mod evaluator;
+mod engine;
+mod model;
 
-pub use types::{AccessPolicy, AllowedIdentity, AllowedMethod, DenyRule, PolicyEvaluator};
-pub use store::{PolicyStore, FilePolicyStore};
-pub use engine::PolicyEngine;
-pub use evaluator::PolicyEvaluatorService;
+pub use engine::{PolicyEngine, YamlPolicyEngine};
+pub use model::{PolicyDefinition, PolicyRule};

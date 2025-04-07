@@ -1,0 +1,36 @@
+# PQSecure Mesh Policy Definition
+
+# Default action when no rules match (false = deny by default)
+default_action: false
+
+# List of policy rules
+rules:
+  # Allow all connections from the monitoring service
+  - spiffe_id: "spiffe://example.org/service/monitoring"
+    allow: true
+
+  # Allow specific HTTP endpoints from the web service
+  - spiffe_id: "spiffe://example.org/service/web"
+    protocol: "http"
+    method: "regex:^GET /api/v1/.*$"
+    allow: true
+
+  # Allow specific gRPC methods from the api service
+  - spiffe_id: "spiffe://example.org/service/api"
+    protocol: "grpc"
+    method: "regex:^api\\..*Service/Get.*$"
+    allow: true
+
+  # Allow all connections from the mesh service
+  - spiffe_id: "regex:spiffe://example.org/service/mesh-.*"
+    allow: true
+
+  # Deny all connections from the banned service
+  - spiffe_id: "spiffe://example.org/service/banned"
+    allow: false
+
+  # Example of full access control for test backend
+  - spiffe_id: "spiffe://example.org/service/test-client"
+    protocol: "http"
+    method: "*"
+    allow: true

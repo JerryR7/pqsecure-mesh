@@ -1,0 +1,49 @@
+# PQSecure Mesh Configuration
+
+# CA configuration
+ca:
+  # Smallstep CA API endpoint
+  api_url: "https://ca.example.org:9000"
+  # Path to store/load certificate
+  cert_path: "./certs/cert.pem"
+  # Path to store/load private key
+  key_path: "./certs/key.pem"
+  # Bearer token for authentication with CA
+  token: "${SMALLSTEP_TOKEN}"
+  # SPIFFE ID to use when generating CSR
+  spiffe_id: "spiffe://example.org/service/pqsecure-mesh"
+
+# Identity verification configuration
+identity:
+  # Trusted domain for SPIFFE IDs
+  trusted_domain: "example.org"
+
+# Policy engine configuration
+policy:
+  # Path to policy definition file
+  path: "./config/policy.yaml"
+
+# Proxy service configuration
+proxy:
+  # Address to listen on for incoming connections
+  listen_addr: "0.0.0.0:8443"
+
+  # Backend service configuration
+  backend:
+    # Backend service address
+    address: "127.0.0.1:8080"
+    # Connection timeout in seconds
+    timeout_seconds: 30
+
+  # Enabled protocols
+  protocols:
+    tcp: true
+    http: true
+    grpc: true
+
+# Telemetry configuration
+telemetry:
+  # OpenTelemetry collector endpoint (optional)
+  otel_endpoint: "http://otel-collector:4317"
+  # Service name for telemetry
+  service_name: "pqsecure-mesh"
