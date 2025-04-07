@@ -1,29 +1,19 @@
-use anyhow::Result;
-use rustls::Certificate;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tracing::{debug, error, info};
 
-use crate::common::{ConnectionInfo, ProtocolType, ServiceIdentity, PqSecureError};
+use crate::common::{ConnectionInfo, ProtocolType, PqSecureError};
 use crate::config::BackendConfig;
-use crate::identity::{IdentityExtractor, SpiffeVerifier};
+use crate::identity::SpiffeVerifier;
 use crate::policy::PolicyEngine;
-use crate::proxy::{forwarder::Forwarder, handler::DefaultConnectionHandler};
+use crate::proxy::handler::{BaseHandler, DefaultConnectionHandler};
+use crate::proxy::pqc_acceptor::get_current_client_cert;
 use crate::telemetry;
 
 /// Handler for raw TCP connections
 pub struct TcpHandler {
-    /// Backend configuration
-    backend_config: BackendConfig,
-
-    /// Policy engine
-    policy_engine: Arc<dyn PolicyEngine>,
-
-    /// SPIFFE verifier
-    spiffe_verifier: Arc<SpiffeVerifier>,
-
-    /// Data forwarder
-    forwarder: Forwarder,
+    /// Common base handler with shared functionality
+    base: BaseHandler,
 }
 
 impl TcpHandler {
@@ -33,14 +23,8 @@ impl TcpHandler {
         policy_engine: Arc<dyn PolicyEngine>,
         spiffe_verifier: Arc<SpiffeVerifier>,
     ) -> Result<Self> {
-        let forwarder = Forwarder::new(backend_config.timeout_seconds);
-
-        Ok(Self {
-            backend_config,
-            policy_engine,
-            spiffe_verifier,
-            forwarder,
-        })
+        let base = BaseHandler::new(backend_config, policy_engine, spiffe_verifier)?;
+        Ok(Self { base })
     }
 }
 
@@ -65,36 +49,26 @@ impl crate::proxy::handler::ConnectionHandler for TcpHandler {
         // Create connection info
         let mut connection_info = ConnectionInfo::new(client_addr, ProtocolType::Tcp);
 
-        // Extract client certificate and identity
-        // For this simplified version, we'll assume the identity has already been verified
-        // during TLS handshake
+        // Get client certificate from thread-local storage
+        let client_cert = get_current_client_cert()
+            .ok_or_else(|| PqSecureError::AuthenticationError("No client certificate found".to_string()))?;
+
+        // Extract SPIFFE ID from certificate
+        let identity = self.base.extract_spiffe_id(&client_cert)
+            .context("Failed to extract SPIFFE ID from certificate")?;
+
+        // Update connection info with identity
+        connection_info = connection_info.with_identity(identity.clone());
 
         // Policy check with generic method for TCP
         let method = "connect";
-        let spiffe_id = format!("spiffe://example.org/service/client"); // Placeholder
+        let spiffe_id = &identity.spiffe_id;
 
-        let allowed = self.policy_engine.allow(&spiffe_id, method);
-        telemetry::record_policy_decision(&spiffe_id, method, allowed);
+        // Check if the connection is allowed by policy
+        let allowed = self.base.policy_engine.allow(spiffe_id, method);
+        telemetry::record_policy_decision(spiffe_id, method, allowed);
 
-        if !allowed {
-            error!(
-                "Connection denied by policy: {} -> {} (method: {})",
-                spiffe_id, self.backend_config.address, method
-            );
-            return Err(PqSecureError::AuthorizationError(
-                "Connection denied by policy".to_string(),
-            ).into());
-        }
-
-        // Connect to backend
-        let backend_stream = self.forwarder.connect_to_backend(&self.backend_config.address).await?;
-
-        // Forward data
-        info!(
-            "Forwarding TCP connection from {} to {}",
-            client_addr, self.backend_config.address
-        );
-
-        self.forwarder.forward(client_stream, backend_stream, &connection_info).await
+        // Use base handler to connect and forward
+        self.base.connect_and_forward(client_stream, &connection_info, spiffe_id, method, allowed).await
     }
 }

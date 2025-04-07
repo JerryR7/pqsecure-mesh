@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::env;
 use tracing::{debug, info};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 

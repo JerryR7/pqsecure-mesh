@@ -5,8 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use tracing::{debug, trace};
-
-use crate::common::PqSecureError;
+// use crate::common::PqSecureError;
 use crate::policy::model::*;
 
 /// Policy engine trait for access control decisions
@@ -244,5 +243,83 @@ mod tests {
 
         assert!(!engine.allow("spiffe://example.org/service/denied", "any"));
         assert!(engine.allow("spiffe://example.org/service/other", "any"));
+    }
+    
+    #[test]
+    fn test_protocol_specific_policy() {
+        let yaml = r#"
+        default_action: false
+        rules:
+          - spiffe_id: "spiffe://example.org/service/api"
+            protocol: "http"
+            method: "GET /api/users"
+            allow: true
+          - spiffe_id: "spiffe://example.org/service/api"
+            protocol: "grpc"
+            method: "UserService.GetUsers"
+            allow: true
+          - spiffe_id: "spiffe://example.org/service/api"
+            protocol: "tcp"
+            allow: false
+        "#;
+
+        let engine = YamlPolicyEngine::from_yaml(yaml).unwrap();
+        
+        // HTTP endpoint should be allowed
+        assert!(engine.allow("spiffe://example.org/service/api", "GET /api/users"));
+        
+        // Different HTTP endpoint should be denied
+        assert!(!engine.allow("spiffe://example.org/service/api", "POST /api/users"));
+        
+        // gRPC method should be allowed
+        assert!(engine.allow("spiffe://example.org/service/api", "UserService.GetUsers"));
+        
+        // When protocol is detected as TCP, should be denied
+        assert!(!engine.allow("spiffe://example.org/service/api", "connect"));
+    }
+    
+    #[test]
+    fn test_complex_policy_rules() {
+        let yaml = r#"
+        default_action: false
+        rules:
+          # Allow all monitoring traffic
+          - spiffe_id: "regex:spiffe://example.org/service/monitoring-.*"
+            allow: true
+            
+          # Allow authenticated service methods
+          - spiffe_id: "regex:spiffe://example.org/service/.*"
+            method: "regex:^auth\\..+"
+            allow: true
+            
+          # Block specific dangerous methods
+          - spiffe_id: "*"
+            method: "regex:^(delete|drop|remove).*"
+            allow: false
+            
+          # Allow remaining traffic from trusted services
+          - spiffe_id: "regex:spiffe://example.org/service/(trusted|internal)/.*"
+            allow: true
+        "#;
+
+        let engine = YamlPolicyEngine::from_yaml(yaml).unwrap();
+        
+        // Monitoring service should be allowed regardless of method
+        assert!(engine.allow("spiffe://example.org/service/monitoring-1", "any_method"));
+        
+        // Any service with auth.* method should be allowed
+        assert!(engine.allow("spiffe://example.org/service/unknown", "auth.login"));
+        
+        // Dangerous methods should be blocked for any service
+        assert!(!engine.allow("spiffe://example.org/service/trusted/db", "delete_all"));
+        
+        // Trusted services should be allowed for normal operations
+        assert!(engine.allow("spiffe://example.org/service/trusted/api", "get_users"));
+        
+        // Untrusted services should be denied
+        assert!(!engine.allow("spiffe://example.org/service/untrusted", "get_users"));
+        
+        // External domain should be denied
+        assert!(!engine.allow("spiffe://attacker.org/service/trusted", "get_users"));
     }
 }

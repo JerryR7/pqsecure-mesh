@@ -4,17 +4,17 @@ use std::fs;
 use tracing::trace;
 
 /// Read a file as bytes, useful for loading certificates and keys
-pub fn read_file_bytes<P: AsRef<Path>>(path: P) -> Result<Vec<u8>> {
+pub async fn read_file_bytes<P: AsRef<Path>>(path: P) -> Result<Vec<u8>> {
     let path = path.as_ref();
     trace!("Reading file: {}", path.display());
-    Ok(fs::read(path)?)
+    Ok(tokio::fs::read(path).await?)
 }
 
 /// Read a file as string, useful for loading config files
-pub fn read_file_string<P: AsRef<Path>>(path: P) -> Result<String> {
+pub async fn read_file_string<P: AsRef<Path>>(path: P) -> Result<String> {
     let path = path.as_ref();
     trace!("Reading file as string: {}", path.display());
-    Ok(fs::read_to_string(path)?)
+    Ok(tokio::fs::read_to_string(path).await?)
 }
 
 /// Write bytes to a file with proper permissions, useful for saving certificates

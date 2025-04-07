@@ -1,23 +1,24 @@
+use std::str::FromStr;
 use anyhow::{Context, Result};
-use rcgen::{Certificate, CertificateParams, DnType, KeyPair, KeyPairAlg, SanType};
+use rcgen::{CertificateParams, DnType, KeyPair, SanType};
 use tracing::debug;
 
 /// Generate a CSR with SPIFFE ID as a SAN URI
 pub fn generate_csr(spiffe_id: &str) -> Result<(String, Vec<u8>)> {
     debug!("Generating CSR with SPIFFE ID: {}", spiffe_id);
 
-    // Generate a fresh key pair
-    let key_pair = KeyPair::generate(&KeyPairAlg::ECDSA_P256_SHA256)
+    // Generate key pair without algorithm parameter (uses P-256 by default)
+    let key_pair = KeyPair::generate()
         .context("Failed to generate key pair")?;
 
     // Create certificate parameters
-    let mut params = CertificateParams::new(vec![]);
+    let mut params = CertificateParams::default();
 
     // Set common name to a generic value (SPIFFE ID is in SAN)
     params.distinguished_name.push(DnType::CommonName, "pqsecure-mesh");
 
-    // Add SPIFFE ID as a SAN URI
-    params.subject_alt_names.push(SanType::URI(spiffe_id.to_string()));
+    // Add SPIFFE ID as a SAN URI directly
+    params.subject_alt_names.push(SanType::URI(rcgen::Ia5String::from_str(spiffe_id)?));
 
     // Set key usage for client authentication
     params.key_usages = vec![
@@ -31,16 +32,16 @@ pub fn generate_csr(spiffe_id: &str) -> Result<(String, Vec<u8>)> {
         rcgen::ExtendedKeyUsagePurpose::ServerAuth,
     ];
 
-    // Set CSR flag
-    params.is_ca = false;
+    // Set CSR flag - not a CA certificate
+    params.is_ca = rcgen::IsCa::NoCa;
 
-    // Build the certificate object
-    let cert = Certificate::from_params(params)
-        .context("Failed to create certificate")?;
+    // Build the certificate object with our parameters and key pair
+    let cert = params.serialize_request(&key_pair)
+        .context("Failed to create certificate signing request")?;
 
-    // Generate CSR in PEM format
-    let csr_pem = cert.serialize_request_pem()
-        .context("Failed to serialize CSR")?;
+    // Get CSR in PEM format
+    let csr_pem = cert.pem()
+        .context("Failed to serialize CSR to PEM")?;
 
     // Extract private key in DER format
     let key_der = key_pair.serialize_der();

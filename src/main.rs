@@ -1,7 +1,7 @@
 use anyhow::Result;
 use pqsecure_mesh::{
     ca::SmallstepClient,
-    config::{load_config, Config},
+    config::load_config,
     crypto::build_tls_config,
     identity::SpiffeVerifier,
     policy::YamlPolicyEngine,
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
 
     // 5. Initialize policy engine
     let policy_engine = Arc::new(YamlPolicyEngine::from_path(&config.policy.path)?);
-    info!("Policy engine initialized with rules from {}", config.policy.path);
+    info!("Policy engine initialized with rules from {}", config.policy.path.display());
 
     // 6. Setup SPIFFE verifier
     let spiffe_verifier = Arc::new(SpiffeVerifier::new(config.identity.trusted_domain.clone()));

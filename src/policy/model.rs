@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Policy rule for access control
 #[derive(Debug, Clone, Serialize, Deserialize)]

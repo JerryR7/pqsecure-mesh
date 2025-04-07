@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
-use rustls::server::ClientCertVerified;
-use rustls::{Certificate, Error};
-use spiffe::workload::SpiffeId;
-use std::sync::Arc;
+use rustls::pki_types::CertificateDer;
+use spiffe::SpiffeId;
 use tracing::{debug, error, trace};
+use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::*;
 
 use crate::common::{PqSecureError, ServiceIdentity};
@@ -11,7 +10,7 @@ use crate::common::{PqSecureError, ServiceIdentity};
 /// Trait for extracting identity from different sources
 #[async_trait::async_trait]
 pub trait IdentityExtractor: Send + Sync {
-    async fn extract_identity(&self, cert: &Certificate) -> Result<ServiceIdentity>;
+    async fn extract_identity(&self, cert: &CertificateDer<'_>) -> Result<ServiceIdentity>;
 }
 
 /// SPIFFE ID verifier for X.509 certificates
@@ -28,62 +27,68 @@ impl SpiffeVerifier {
     }
 
     /// Extract and verify SPIFFE ID from X.509 certificate
-    pub fn extract_spiffe_id(&self, cert: &Certificate) -> Result<ServiceIdentity> {
+    pub fn extract_spiffe_id(&self, cert: &CertificateDer<'_>) -> Result<ServiceIdentity> {
         // Parse the certificate
         let (_, cert) = X509Certificate::from_der(cert.as_ref())
             .context("Failed to parse X.509 certificate")?;
 
         // Extract SAN extensions
         let extensions = cert.extensions();
-        for ext in extensions {
-            if ext.oid == oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME {
-                let san = GeneralNames::from_der(ext.value)
-                    .context("Failed to parse SAN extension")?;
 
-                // Look for URI SAN entries
-                for name in san.1.iter() {
-                    if let GeneralName::URI(uri) = name {
-                        trace!("Found URI SAN: {}", uri);
+        // Find the Subject Alternative Name extension
+        let san_ext = extensions
+            .iter()
+            .find(|ext| ext.oid == oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME)
+            .ok_or_else(|| anyhow::anyhow!("No SubjectAltName extension found"))?;
 
-                        // Parse as SPIFFE ID
-                        let spiffe_id = SpiffeId::parse(uri)
-                            .map_err(|e| PqSecureError::SpiffeIdError(e.to_string()))?;
+        // Parse the extension value to get GeneralNames
+        let parsed_ext = san_ext.parsed_extension();
+        if let ParsedExtension::SubjectAlternativeName(san) = parsed_ext {
+            // Look for URI SAN entries
+            for name in san.general_names.iter() {
+                if let GeneralName::URI(uri) = name {
+                    trace!("Found URI SAN: {}", uri);
 
-                        // Validate trust domain
-                        if spiffe_id.trust_domain().to_string() != self.trusted_domain {
-                            return Err(PqSecureError::AuthenticationError(format!(
-                                "SPIFFE ID trust domain '{}' does not match trusted domain '{}'",
-                                spiffe_id.trust_domain(),
-                                self.trusted_domain
-                            )).into());
-                        }
+                    // Parse as SPIFFE ID
+                    let spiffe_id = SpiffeId::new(uri)
+                        .map_err(|e| PqSecureError::SpiffeIdError(e.to_string()))?;
 
-                        debug!("Valid SPIFFE ID found: {}", spiffe_id);
-                        return Ok(ServiceIdentity {
-                            spiffe_id: uri.to_string(),
-                            trust_domain: spiffe_id.trust_domain().to_string(),
-                            path: spiffe_id.path().to_string(),
-                        });
+                    // Validate trust domain
+                    if spiffe_id.trust_domain().to_string() != self.trusted_domain {
+                        return Err(PqSecureError::AuthenticationError(format!(
+                            "SPIFFE ID trust domain '{}' does not match trusted domain '{}'",
+                            spiffe_id.trust_domain(),
+                            self.trusted_domain
+                        ))
+                            .into());
                     }
+
+                    debug!("Valid SPIFFE ID found: {}", spiffe_id);
+                    return Ok(ServiceIdentity {
+                        spiffe_id: uri.to_string(),
+                        trust_domain: spiffe_id.trust_domain().to_string(),
+                        path: spiffe_id.path().to_string(),
+                    });
                 }
             }
         }
 
         Err(PqSecureError::AuthenticationError(
             "No valid SPIFFE ID found in certificate".to_string(),
-        ).into())
+        )
+            .into())
     }
 
     /// Verify client certificate (for rustls integration)
     pub fn verify_client_cert(
         &self,
-        cert: &Certificate,
-    ) -> Result<ClientCertVerified, Error> {
+        cert: &CertificateDer<'_>,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         match self.extract_spiffe_id(cert) {
-            Ok(_) => Ok(ClientCertVerified::assertion()),
+            Ok(_) => Ok(rustls::client::danger::ServerCertVerified::assertion()),
             Err(e) => {
                 error!("Certificate SPIFFE ID verification failed: {}", e);
-                Err(Error::General("Invalid SPIFFE ID".to_string()))
+                Err(rustls::Error::General("Invalid SPIFFE ID".to_string()))
             }
         }
     }
@@ -91,7 +96,7 @@ impl SpiffeVerifier {
 
 #[async_trait::async_trait]
 impl IdentityExtractor for SpiffeVerifier {
-    async fn extract_identity(&self, cert: &Certificate) -> Result<ServiceIdentity> {
+    async fn extract_identity(&self, cert: &CertificateDer<'_>) -> Result<ServiceIdentity> {
         self.extract_spiffe_id(cert)
     }
 }
@@ -99,16 +104,25 @@ impl IdentityExtractor for SpiffeVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rcgen::{Certificate as RcgenCert, CertificateParams, DnType, SanType};
+    use rcgen::{CertificateParams, DnType, SanType, KeyPair};
 
-    fn generate_test_cert(spiffe_id: &str) -> Certificate {
-        let mut params = CertificateParams::new(vec!["test.example.com".to_string()]);
+    fn generate_test_cert(spiffe_id: &str) -> CertificateDer<'static> {
+        let mut params = CertificateParams::default();
         params.distinguished_name.push(DnType::CommonName, "Test");
-        params.subject_alt_names.push(SanType::URI(spiffe_id.to_string()));
 
-        let cert = RcgenCert::from_params(params).unwrap();
-        let cert_der = cert.serialize_der().unwrap();
-        Certificate(cert_der)
+        // Add SPIFFE ID as URI directly
+        params
+            .subject_alt_names
+            .push(SanType::URI(rcgen::Ia5String::try_from(spiffe_id).unwrap()));
+
+        // Generate key pair
+        let key_pair = KeyPair::generate().unwrap();
+
+        // Create the certificate with the key pair
+        let cert = params.self_signed(&key_pair).unwrap();
+        // Clone the DER data to create a new CertificateDer
+        let der_bytes = cert.der().as_ref().to_vec();
+        CertificateDer::from(der_bytes)
     }
 
     #[test]

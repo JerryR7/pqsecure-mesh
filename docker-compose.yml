@@ -1,50 +1,28 @@
+version: "3.8"
+
 services:
-  # Smallstep CA service for certificate management
-  ca:
+  # Smallstep CA service
+  step-ca:
     image: smallstep/step-ca:latest
-    container_name: pqsecure-ca
+    container_name: step-ca
     volumes:
       - ./step:/home/step
-    environment:
-      - DOCKER_STEPCA_INIT_NAME=PQSecure Mesh CA
-      - DOCKER_STEPCA_INIT_DNS_NAMES=ca,localhost
-      - DOCKER_STEPCA_INIT_PROVISIONER_NAME=pqsecure-admin
     ports:
       - "9000:9000"
-    networks:
-      - pqsecure-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "https://localhost:9000/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-
-  # PQSecure Mesh service
-  pqsecure-mesh:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: pqsecure-mesh
-    depends_on:
-      ca:
-        condition: service_healthy
-    volumes:
-      - ./config:/app/config
-      - ./certs:/app/certs
     environment:
-      - RUST_LOG=info
-      - PQSECURE_CA_API_URL=https://ca:9000
-      - PQSECURE_CA_TOKEN=${SMALLSTEP_TOKEN:-your_token_here}
-      - PQSECURE_LISTEN_ADDR=0.0.0.0:8443
-      - PQSECURE_BACKEND_ADDR=backend:8080
-    ports:
-      - "8443:8443"
-    networks:
-      - pqsecure-network
-    command: /app/pqsecure-mesh
+      - DOCKER_STEPCA_INIT_NAME=PQSecure Mesh CA
+      - DOCKER_STEPCA_INIT_DNS=localhost
+      - DOCKER_STEPCA_INIT_ADDRESS=:9000
+      - DOCKER_STEPCA_INIT_PROVISIONER=pqsecure-admin
+      - DOCKER_STEPCA_INIT_PASSWORD=123456
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-O", "-", "https://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  # Sample backend service
+  # Backend API service (simulating EDR manager)
   backend:
     image: nginx:alpine
     container_name: pqsecure-backend
@@ -53,21 +31,32 @@ services:
       - ./sample/html:/usr/share/nginx/html
     ports:
       - "8080:8080"
-    networks:
-      - pqsecure-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-O", "-", "http://127.0.0.1:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  # Sample client for testing
-  test-client:
-    image: curlimages/curl:latest
-    container_name: pqsecure-client
-    depends_on:
-      - pqsecure-mesh
+  # PQSecure Mesh proxy
+  pqsecure-mesh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pqsecure-mesh
     volumes:
-      - ./certs:/certs
-    networks:
-      - pqsecure-network
-    entrypoint: ["sh", "-c", "sleep infinity"]
-
-networks:
-  pqsecure-network:
-    driver: bridge
+      - ./config:/app/config
+      - ./certs:/app/certs
+    environment:
+      - RUST_LOG=info
+      - PQSECURE_CA_API_URL=https://step-ca:9000
+      - PQSECURE_BACKEND_ADDR=backend:8080
+      - PQSECURE_CA_TOKEN=${SMALLSTEP_TOKEN:-default-testing-token}
+    ports:
+      - "8443:8443"
+    depends_on:
+      step-ca:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

@@ -1,28 +1,19 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tracing::{debug, error, info};
 
 use crate::common::{ConnectionInfo, ProtocolType, PqSecureError};
 use crate::config::BackendConfig;
 use crate::identity::SpiffeVerifier;
 use crate::policy::PolicyEngine;
-use crate::proxy::{forwarder::Forwarder, handler::DefaultConnectionHandler};
+use crate::proxy::handler::{BaseHandler, DefaultConnectionHandler};
+use crate::proxy::pqc_acceptor::get_current_client_cert;
 use crate::telemetry;
 
 /// Handler for HTTP/HTTPS connections
 pub struct HttpHandler {
-    /// Backend configuration
-    backend_config: BackendConfig,
-
-    /// Policy engine
-    policy_engine: Arc<dyn PolicyEngine>,
-
-    /// SPIFFE verifier
-    spiffe_verifier: Arc<SpiffeVerifier>,
-
-    /// Data forwarder
-    forwarder: Forwarder,
+    /// Common base handler with shared functionality
+    base: BaseHandler,
 }
 
 impl HttpHandler {
@@ -32,22 +23,38 @@ impl HttpHandler {
         policy_engine: Arc<dyn PolicyEngine>,
         spiffe_verifier: Arc<SpiffeVerifier>,
     ) -> Result<Self> {
-        let forwarder = Forwarder::new(backend_config.timeout_seconds);
-
-        Ok(Self {
-            backend_config,
-            policy_engine,
-            spiffe_verifier,
-            forwarder,
-        })
+        let base = BaseHandler::new(backend_config, policy_engine, spiffe_verifier)?;
+        
+        Ok(Self { base })
     }
 
     /// Detect if the connection is an HTTP connection
     async fn is_http(&self, stream: &TcpStream) -> bool {
-        // In a real implementation, we would peek at the stream to check for HTTP headers
-        // For this simplified version, we'll return true if it's not detected as gRPC
-        // This is a placeholder as proper protocol detection requires more complex logic
-        true
+
+        // Create a peek buffer
+        let mut buf = [0u8; 8];
+        
+        // Clone the stream
+        let peek_stream = stream;
+
+        // Set to non-blocking to prevent hanging
+        if let Err(_) = peek_stream.set_nodelay(true) {
+            return false;
+        }
+        
+        // Peek at the first few bytes
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(100), 
+            peek_stream.peek(&mut buf)
+        ).await {
+            Ok(Ok(n)) if n >= 3 => {
+                // Check for common HTTP method prefixes
+                // GET, POST, PUT, HEAD, etc.
+                let start = String::from_utf8_lossy(&buf[0..3]).to_ascii_uppercase();
+                matches!(start.as_ref(), "GET" | "POS" | "PUT" | "HEA" | "DEL" | "OPT" | "PAT")
+            },
+            _ => false,
+        }
     }
 
     /// Extract method and path from HTTP request
@@ -78,39 +85,35 @@ impl crate::proxy::handler::ConnectionHandler for HttpHandler {
         // Create connection info
         let mut connection_info = ConnectionInfo::new(client_addr, ProtocolType::Http);
 
+        // Get client certificate from thread-local storage
+        let client_cert = get_current_client_cert()
+            .ok_or_else(|| PqSecureError::AuthenticationError("No client certificate found".to_string()))?;
+
+        // Extract SPIFFE ID from certificate
+        let identity = self.base.extract_spiffe_id(&client_cert)
+            .context("Failed to extract SPIFFE ID from certificate")?;
+
+        // Update connection info with identity
+        connection_info = connection_info.with_identity(identity.clone());
+
         // Extract method and path (in a real implementation, this would be parsed from HTTP headers)
         let (method, path) = self.extract_method_and_path(&client_stream).await
             .unwrap_or_else(|| ("unknown".to_string(), "/".to_string()));
 
         // Combine method and path for policy check
         let method_path = format!("{} {}", method, path);
+        
+        // Update connection info with method
+        connection_info = connection_info.with_method(method_path.clone());
 
-        // For this simplified version, we'll use a placeholder SPIFFE ID
-        let spiffe_id = "spiffe://example.org/service/client".to_string();
+        // Get SPIFFE ID for policy check
+        let spiffe_id = &identity.spiffe_id;
 
         // Check policy
-        let allowed = self.policy_engine.allow(&spiffe_id, &method_path);
-        telemetry::record_policy_decision(&spiffe_id, &method_path, allowed);
+        let allowed = self.base.policy_engine.allow(spiffe_id, &method_path);
+        telemetry::record_policy_decision(spiffe_id, &method_path, allowed);
 
-        if !allowed {
-            error!(
-                "HTTP request denied by policy: {} -> {} ({})",
-                spiffe_id, self.backend_config.address, method_path
-            );
-            return Err(PqSecureError::AuthorizationError(
-                "HTTP request denied by policy".to_string(),
-            ).into());
-        }
-
-        // Connect to backend
-        let backend_stream = self.forwarder.connect_to_backend(&self.backend_config.address).await?;
-
-        // Forward data
-        info!(
-            "Forwarding HTTP connection from {} to {} ({})",
-            client_addr, self.backend_config.address, method_path
-        );
-
-        self.forwarder.forward(client_stream, backend_stream, &connection_info).await
+        // Use base handler to connect and forward
+        self.base.connect_and_forward(client_stream, &connection_info, spiffe_id, &method_path, allowed).await
     }
 }
